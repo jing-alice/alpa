@@ -36,6 +36,10 @@ class WrappedHlo:
         self.status = status
         self.is_manually_annotated = False
 
+    def get_mlir_text(self):
+        return xc._xla.mlir.xla_computation_to_mlir_module(
+            self.get_computation())
+
     def get_computation(self) -> xe.XlaComputation:
         return xe.XlaComputation(self.module.as_serialized_hlo_module_proto())
 
@@ -81,3 +85,8 @@ class WrappedHlo:
     def __setstate__(self, bytes_and_status):
         b, s = bytes_and_status
         self.__init__(b, s)
+
+    def clone(self):
+        ret = WrappedHlo(xe.hlo_module_from_text(self.to_string()), self.status)
+        ret.is_manually_annotated = self.is_manually_annotated
+        return ret
