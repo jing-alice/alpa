@@ -29,6 +29,7 @@ if global_config.has_cuda:
     # cupy types are the same with numpy types
     NUMPY_NCCL_DTYPE_MAP = {
         # INT types
+        numpy.int64: nccl.NCCL_INT64,
         numpy.uint8: nccl.NCCL_UINT8,
         numpy.uint32: nccl.NCCL_UINT32,
         numpy.uint64: nccl.NCCL_UINT64,
