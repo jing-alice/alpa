@@ -6,14 +6,10 @@ from jax._src.lib import xla_client as xc
 from jax.interpreters.pxla import _is_unspecified, _UNSPECIFIED
 # _is_from_gda
 
-from jax._src.sharding_impls import prepare_axis_resources, get_array_mapping, ParsedPartitionSpec
+from jax._src.sharding_impls import prepare_axis_resources, get_array_mapping, PartitionSpec,ParsedPartitionSpec
 from jax._src.pjit import is_auto
 from jax._src.tree_util import _replace_nones
 from jax._src.util import safe_zip
-from jax.experimental.pjit import (_is_unspecified, _is_auto, _is_from_gda,
-                                   _prepare_axis_resources, get_array_mapping,
-                                   _UNSPECIFIED, PartitionSpec,
-                                   ParsedPartitionSpec)
 from jax.interpreters import mlir, pxla
 from jax.tree_util import tree_unflatten, tree_flatten, tree_map
 
