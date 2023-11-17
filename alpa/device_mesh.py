@@ -877,13 +877,14 @@ class LocalPhysicalDeviceMesh(PhysicalDeviceMesh):
                     for x in micro_batches
                 ])
             else:
-                if (isinstance(arg, Array)):
+                if (isinstance(arg, Array) and arg.is_fully_addressable and len(arg.sharding.device_set) > 1):
+                    bufs.append(arg.device_buffers)
                 # if (isinstance(arg, Array) and
                 #         arg.indices == indices):
-                    bufs.append(arg.device_buffers)
+                #     bufs.append(arg.device_buffers)
                 else:
                     bufs.append(
-                        pxla.shard_arg(arg, self.devices, indices, None))
+                        pxla.shard_arg(arg, self.devices, indices, arg.sharding))
 
             if isinstance(arg, xe.DeviceArray) and donated:
                 arg.delete()
