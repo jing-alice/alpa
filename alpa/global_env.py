@@ -74,12 +74,12 @@ class GlobalConfig:
         self.use_local_allgather = False
         # Cross mesh resharding mode. Possible choices: {"send_recv",
         # "broadcast"}
-        self.resharding_mode = "broadcast"
+        self.resharding_mode = "send_recv"
         # Which nccl to use. Possible choices: {"cupy",
         # "xla_extension"}
         # FIXME: cupy is broken. Test after ArrayImpl-DeviceArray-Buffer
         # relationship is fixed.
-        self.nccl_mode = "xla_extension"
+        self.nccl_mode = "cupy"
         self.enable_overlapping = False
         # Cross mesh resharding load balancing mode.
         # Possible choices: {"normal", "no_loadbalance",

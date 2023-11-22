@@ -5,6 +5,7 @@ from enum import Enum, auto
 from typing import Union
 
 from jax._src.lib import xla_extension as xe
+from jax._src.lib import xla_client as xc
 from jax.interpreters import mlir
 
 

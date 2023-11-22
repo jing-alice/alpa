@@ -1192,7 +1192,8 @@ def xla_buffer_to_jax_tensor(xla_buf):
 
 def jax_tensor_to_xla_buffer(jax_buf):
     """Convert a JAX Device array back to XLA buffer."""
-    return jax_buf.device_buffer
+    # return jax_buf.device_buffer
+    return jax_buf._value
 
 
 # Note: use Python jit instead of CPP jit,

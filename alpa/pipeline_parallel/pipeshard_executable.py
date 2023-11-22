@@ -522,7 +522,6 @@ class PipeshardMeshWorkerExecutable:
         timers(self.exec_timer_name).start(sync_func=sync_func)
 
         for instruction in self.instructions:
-            #self.worker.sync()
             #print(f"memory_allocated: "
             #      f"{self.worker.get_memory_allocated()/1024**3:.3f} GB  "
             #      f"max_memory_allocated: "

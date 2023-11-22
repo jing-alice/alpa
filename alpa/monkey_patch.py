@@ -98,8 +98,7 @@ xla.register_translation(rng_normal_p, _rng_normal_translation_rule)
 
 def _rng_normal_lowering(ctx, mu, sigma, *, shape):
     aval_out, = ctx.avals_out
-    shape, = mlir.ir_constants(np.array(aval_out.shape, np.int64),
-                               canonicalize_types=False)
+    shape, = mlir.ir_constants(np.array(aval_out.shape, np.int64))
     return mhlo.RngOp(mu, sigma, shape,
                       mhlo.RngDistributionAttr.get("NORMAL")).results
 

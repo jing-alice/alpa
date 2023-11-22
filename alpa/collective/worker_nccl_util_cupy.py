@@ -14,6 +14,7 @@ import numpy as np
 
 import alpa.collective as col
 from alpa.collective.collective_group import nccl_util
+from alpa.collective.collective import synchronize
 from alpa.util import (jax_tensor_set, jax_tensor_index,
                        xla_buffer_to_jax_tensor, jax_tensor_to_xla_buffer,
                        is_continuous_subset, infer_offset_and_n_elements)
@@ -101,6 +102,7 @@ def recv_tile(worker, uuid: int, device_id: int,
                               src_gpu_idx,
                               group_name,
                               n_elements=n_elements)
+        synchronize(src_gpu_idx)
         new_buffer = cupy_to_xla_buffer(to_recv)
     else:
         # The following call will allocate memory and cause a few H2D and
@@ -192,7 +194,6 @@ def broadcast(worker, uuid, comm_key, world_size, devices_ids,
                 tmp = jax_tensor_to_cupy(tmp, take_ownership=True)
             to_use.append(tmp)
             for_buffer.append(tmp)
-
     _, n_elements = infer_offset_and_n_elements(tensor_slices[0])
     col.broadcast_partialgpu(to_use, n_elements, comm_key, world_size,
                              devices_ids, devices_global_rank, group_name)
@@ -233,6 +234,7 @@ def xla_buffer_to_cupy(xla_buf, take_ownership=False):
 
 def cupy_to_xla_buffer(tensor):
     """Convert cupy tensors to XLA buffers."""
+    # print("tensor: ", tensor)
     if isinstance(tensor, list):
         return list(map(cupy_to_xla_buffer, tensor))
     cpu_backend = xb.get_backend("cpu")

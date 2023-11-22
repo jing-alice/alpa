@@ -765,7 +765,7 @@ def generate_sharded_xla_computations_arguments(
             if spec is None:
                 sharding_protos.append(replicated_sharding_spec_proto())
             else:
-                sharding_protos.append(spec.sharding_proto())
+                sharding_protos.append((spec.sharding_proto()).to_proto())
         hlo.set_output_shardings(sharding_protos)
 
     if stage_input_sharding:

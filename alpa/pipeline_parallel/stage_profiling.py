@@ -359,7 +359,8 @@ class ProfileWorker:
         executable = PartialGradAccMeshDriverExecutable(self.mesh, hlo,
                                                         stage_plan, input_avals,
                                                         output_avals,
-                                                        donated_invars)
+                                                        donated_invars,
+                                                    grad_acc_indices=[])
 
         # Run profiling
         self.mesh.reset_memory_stats()

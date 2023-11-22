@@ -287,6 +287,7 @@ class XLANCCLGroup(BaseGroup):
         """
 
         buffer = tensors[0]
+        print("buffer: ",buffer)
         my_gpu_idx = xe.get_buffer_device_id(buffer)
         peer_rank, peer_gpu_idx = \
             recv_options.src_rank, recv_options.src_gpu_index

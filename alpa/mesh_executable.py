@@ -970,22 +970,22 @@ class PartialGradAccMeshDriverExecutable(NormalMeshDriverExecutable):
             for w in physical_mesh.workers:
                 w.put_executable.remote(self.exec_uuid,
                                         PartialGradAccMeshWorkerExecutable, hlo,
-                                        stage_plan, self.donated_invars,
-                                        self.grad_acc_indices)
+                                        stage_plan, self.donated_invars)
+                                        # self.grad_acc_indices)
             self.hlo_text = None  # will be fetched from the workers later
             self.grad_sync_channel_ids = None
             self.skip_allreduce_env_name = None
         else:
             assert isinstance(physical_mesh, LocalPhysicalDeviceMesh)
-            rewrite_for_grad_acc = (self.grad_acc_indices is not None and
-                                    (len(self.grad_acc_indices) > 0))
+            # rewrite_for_grad_acc = (self.grad_acc_indices is not None and
+            #                         (len(self.grad_acc_indices) > 0))
             self.compiled = run_backend_compilation(
                 physical_mesh.backend,
                 hlo,
                 stage_plan,
-                physical_mesh.num_devices,
-                rewrite_for_grad_acc=rewrite_for_grad_acc,
-                rewrite_grad_acc_indices=self.grad_acc_indices)
+                physical_mesh.num_devices)
+                # rewrite_for_grad_acc=rewrite_for_grad_acc,
+                # rewrite_grad_acc_indices=self.grad_acc_indices)
             self.hlo_text = self.compiled.hlo_modules()[0].to_string()
             self.grad_sync_channel_ids = get_grad_sync_channel_ids(
                 self.compiled.hlo_modules()[0])
@@ -1022,13 +1022,13 @@ class PartialGradAccMeshWorkerExecutable(NormalMeshWorkerExecutable):
         self.skip_allreduce_env_name = (self.compiled.hlo_modules()[0].name +
                                         "XLA_SKIP_NCCL_COLLECTIVE_IDS")
 
-    def _get_compilation_args(self):
-        ret = super()._get_compilation_args()
-        rewrite_for_grad_acc = (self.grad_acc_indices is not None and
-                                (len(self.grad_acc_indices) > 0))
-        ret["rewrite_grad_acc_indices"] = self.grad_acc_indices
-        ret["rewrite_for_grad_acc"] = rewrite_for_grad_acc
-        return ret
+    # def _get_compilation_args(self):
+    #     ret = super()._get_compilation_args()
+    #     rewrite_for_grad_acc = (self.grad_acc_indices is not None and
+    #                             (len(self.grad_acc_indices) > 0))
+    #     ret["rewrite_grad_acc_indices"] = self.grad_acc_indices
+    #     ret["rewrite_for_grad_acc"] = rewrite_for_grad_acc
+    #     return ret
 
     # pylint: disable=arguments-differ
     def execute_on_worker(self, input_uuids: Sequence[int],

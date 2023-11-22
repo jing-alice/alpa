@@ -6,7 +6,7 @@ from typing import List
 import numpy as np
 import ray
 from jax._src.lib import xla_extension as xe
-
+from jax import Array
 from alpa.collective import types
 from alpa.global_env import global_config
 from alpa.util import try_import_ray_worker
@@ -800,7 +800,8 @@ def compute_wait_comm(group_name, is_send, is_compute, device_id):
 
 def _check_single_tensor_input(tensor):
     """Check if the tensor is with a supported type."""
-    if isinstance(tensor, (np.ndarray, xe.DeviceArray)):
+    # if isinstance(tensor, (np.ndarray, xe.DeviceArray)):
+    if isinstance(tensor, (np.ndarray, Array)):
         return
     if types.cupy_available():
         if isinstance(tensor, types.cp.ndarray):

@@ -47,6 +47,7 @@ from jax.interpreters.pxla import (
 from jax import Array
 from jax._src.array import _hashable_index
 from jax._src.interpreters.pxla import _get_pmap_sharding
+from jax._src.sharding_specs import spec_to_indices
 from jax.lib import xla_client
 import jax.numpy as jnp
 import numpy as np
@@ -786,7 +787,7 @@ class PhysicalDeviceMesh(ABC):
             for x in placement_specs)
         specs = tuple(x.sharding_specs[0] for x in placement_specs)
         indices = tuple(
-            pxla.spec_to_indices(aval.shape, spec)
+            spec_to_indices(aval.shape, spec)
             for aval, spec in zip(avals, specs))
         return self.shard_args_to_arrays(avals, indices, specs, args)
 
@@ -879,15 +880,15 @@ class LocalPhysicalDeviceMesh(PhysicalDeviceMesh):
             else:
                 if (isinstance(arg, Array) and arg.is_fully_addressable and len(arg.sharding.device_set) > 1):
                     bufs.append(arg.device_buffers)
-                # if (isinstance(arg, Array) and
-                #         arg.indices == indices):
+                # if (isinstance(arg, Array)):
                 #     bufs.append(arg.device_buffers)
                 else:
                     bufs.append(
                         pxla.shard_arg(arg, self.devices, indices, arg.sharding))
-
-            if isinstance(arg, xe.DeviceArray) and donated:
-                arg.delete()
+            
+            # if isinstance(arg, xe.DeviceArray) and donated:
+            # if isinstance(arg, Array) and donated:
+            #     arg.delete()
 
         return bufs
 
@@ -1344,7 +1345,7 @@ class DistributedPhysicalDeviceMesh(PhysicalDeviceMesh):
     def get_outputs_handler(self, avals: Sequence[ShapedArray],
                             sharding_specs: Sequence[ShardingSpec]):
         indices = [
-            pxla.spec_to_indices(aval.shape, spec)
+            spec_to_indices(aval.shape, spec)
             for aval, spec in zip(avals, sharding_specs)
         ]
 
@@ -1517,7 +1518,7 @@ class DistributedArray:
         self.remote_ref = remote_ref
 
         if indices is None:
-            indices = pxla.spec_to_indices(self.aval.shape, self.sharding_spec)
+            indices = spec_to_indices(self.aval.shape, self.sharding_spec)
         self.indices = indices
 
         self.shape = self.aval.shape
@@ -1611,7 +1612,7 @@ class DistributedArray:
         """
         # pylint: disable=import-outside-toplevel
         ary_ref = RemoteArrayRef(device_mesh)
-        indices = pxla.spec_to_indices(aval.shape, sharding_spec)
+        indices = spec_to_indices(aval.shape, sharding_spec)
 
         indices_per_host = {}
         device_ids_per_host = {}
@@ -2037,7 +2038,7 @@ class PhysicalDeviceMeshGroup:
             if len(info.mesh_ids) == 1:
                 mesh = self.meshes[info.mesh_ids[0]]
                 spec = info.sharding_specs[0]
-                indices = pxla.spec_to_indices(aval.shape, spec)
+                indices = spec_to_indices(aval.shape, spec)
                 rets.append(
                     mesh.shard_args_to_arrays((aval,), (indices,), (spec,),
                                               (arg,))[0])
@@ -2046,7 +2047,7 @@ class PhysicalDeviceMeshGroup:
                 for mesh_id, spec in zip(info.mesh_ids, info.sharding_specs):
                     mesh = self.meshes[mesh_id]
                     meshes.append(mesh)
-                    indices = pxla.spec_to_indices(aval.shape, spec)
+                    indices = spec_to_indices(aval.shape, spec)
                     arrays.append(
                         mesh.shard_args_to_arrays((aval,), (indices,), (spec,),
                                                   (arg,))[0])
