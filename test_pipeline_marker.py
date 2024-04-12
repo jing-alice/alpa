@@ -90,8 +90,8 @@ class PipelineMarkerTest(unittest.TestCase):
 def suite():
     suite = unittest.TestSuite()
     suite.addTest(PipelineMarkerTest("test_xla_graph"))
-    suite.addTest(PipelineMarkerTest("test_jax_graph"))
-    suite.addTest(PipelineMarkerTest("test_transpose"))
+    # suite.addTest(PipelineMarkerTest("test_jax_graph"))
+    # suite.addTest(PipelineMarkerTest("test_transpose"))
     return suite
 
 

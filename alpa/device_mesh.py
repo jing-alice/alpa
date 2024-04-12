@@ -58,7 +58,7 @@ from alpa import mesh_profiling
 import alpa.collective as col
 from alpa.global_env import global_config
 from alpa.monkey_patch import set_override_backend
-from alpa.shard_parallel.auto_sharding import (LogicalDeviceMesh)
+from alpa.shard_parallel.auto_sharding import LogicalDeviceMesh
 from alpa.parallel_plan import PlacementSpec
 from alpa.timer import timers, tracer
 from alpa.util import (benchmark_func, list_gpu_info, OrderedSet,
@@ -66,6 +66,7 @@ from alpa.util import (benchmark_func, list_gpu_info, OrderedSet,
                        try_import_ray_worker, create_placement_group,
                        get_bundle_idx, retrieve_placement_group, get_bundle2ip,
                        check_server_port)
+from jax._src.sharding_impls import PositionalSharding
 
 ray_worker = try_import_ray_worker()
 
@@ -138,7 +139,7 @@ class MeshHostWorker:
         global_config.update_worker_config(worker_global_config)
         if global_config.backend == "gpu":
             self.backend = xla_client.make_gpu_client(self.distributed_client,
-                                                      node_id=host_id)
+                                                      node_id=host_id, num_nodes=self.num_hosts)
         else:
             raise NotImplementedError(
                 f"backend {global_config.backend} is not supported")
@@ -221,11 +222,15 @@ class MeshHostWorker:
 
     def _get_buffers_with_local_ids(self, uuid: int, device_ids: Sequence[int]):
         bufs = self.buffers[uuid]
+        # print("device_ids:", device_ids)
+        if uuid ==30 or uuid==22:
+            print("bufsofuuid: ", uuid, np.asarray(bufs).shape)
         # TODO(yonghao): sync communication events. Currently it's safe because
         # we never get values immediately after a cross-mesh communication.
         if device_ids is None:
             return map(np.asarray, bufs)
         elif not isinstance(device_ids, Iterable):
+            print("1111 of uuid: ", uuid, bufs[device_ids].shape)
             return np.asarray(bufs[device_ids])
         return [np.asarray(bufs[device_id]) for device_id in device_ids]
 
@@ -233,6 +238,8 @@ class MeshHostWorker:
                     uuids: Union[Sequence[int], int],
                     device_indices: Sequence[int] = None):
         if not isinstance(uuids, Iterable):
+            print("uuids of get:" ,uuids)
+            print("device_indices: ", device_indices)
             return self._get_buffers_with_local_ids(uuids, device_indices)
         if device_indices is not None:
             assert len(uuids) == len(device_indices)
@@ -281,6 +288,7 @@ class MeshHostWorker:
     ##### Executable Related Functions #####
     def put_executable(self, uuid: int,
                        executable_class: "MeshWorkerExecutable", *args):
+        # breakpoint()
         self.executables[uuid] = executable_class(self, uuid, *args)
 
     def delete_executable(self, uuid: int):
@@ -878,14 +886,16 @@ class LocalPhysicalDeviceMesh(PhysicalDeviceMesh):
                     for x in micro_batches
                 ])
             else:
-                if (isinstance(arg, Array) and arg.is_fully_addressable and len(arg.sharding.device_set) > 1):
+                if (isinstance(arg, Array) and arg.is_fully_addressable and len(arg.sharding.device_set) > 1) and (spec_to_indices(arg.aval.shape, arg.sharding.sharding_spec) == indices):
                     bufs.append(arg.device_buffers)
-                # if (isinstance(arg, Array)):
-                #     bufs.append(arg.device_buffers)
                 else:
-                    bufs.append(
-                        pxla.shard_arg(arg, self.devices, indices, arg.sharding))
+                    # sharding = SingleDeviceSharding(self.devices)
+                    sharding = PositionalSharding(self.devices)
+                    bufs.append((pxla.shard_arg(arg, self.devices, indices, sharding)).device_buffers)
             
+            # 判断是否切分过
+            # if isinstance(arg, xe.ArrayImpl) and donated:
+            #     arg.delete()
             # if isinstance(arg, xe.DeviceArray) and donated:
             # if isinstance(arg, Array) and donated:
             #     arg.delete()
@@ -1664,6 +1674,8 @@ class DistributedArray:
     @property
     def _value(self):
         if self._npy_value is None:
+            print("remote_ref: ", self.remote_ref)
+            print("one_replica_host_local_ids: ", self.one_replica_host_local_ids)
             npy_value = np.empty(self.aval.shape, self.aval.dtype)
             if not self._fetched_np_buffers:
                 if not self._fetched_np_buffers_ref:
@@ -1673,7 +1685,7 @@ class DistributedArray:
                 else:
                     fetched_np_buffers = ray.get(self._fetched_np_buffers_ref)
             else:
-                fetched_np_buffers = self._fetched_np_buffers
+                fetched_np_buffers = self._fetched_np_buffers 
             for ct, i in enumerate(self.one_replica_buffer_ids):
                 npy_value[self.indices[i]] = fetched_np_buffers[ct]
             self._npy_value = npy_value
@@ -2424,6 +2436,7 @@ def create_and_record_cross_mesh_collective_communicators(
     group_name = ",".join(device_strs)
     refs = []
     for rank, worker in enumerate(workers):
+        print(f"{world_size, rank, backend, group_name}")
         ref = worker.create_and_set_cross_mesh_communicators.remote(
             world_size, rank, backend, group_name, key)
         refs.append(ref)

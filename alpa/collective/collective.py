@@ -203,6 +203,7 @@ def create_collective_group(actors,
     _check_backend_availability(backend)
 
     name = "info_" + group_name
+    
     try:
         ray.get_actor(name)
         raise RuntimeError("Trying to initialize a group twice.")
@@ -223,7 +224,7 @@ def create_collective_group(actors,
     if world_size <= 0:
         raise RuntimeError("World size must be greater than zero. "
                            f"Got '{world_size}'.")
-    if not all(ranks) >= 0:
+    if not all(ranks) >= 0: 
         raise RuntimeError("Ranks must be non-negative.")
     if not all(ranks) < world_size:
         raise RuntimeError("Ranks cannot be greater than world_size.")
@@ -295,6 +296,7 @@ def allreduce(tensor, group_name: str = "default", op=types.ReduceOp.SUM):
     g = _check_and_get_group(group_name)
     opts = types.AllReduceOptions
     opts.reduce_op = op
+    print("tensor: ", tensor)
     g.allreduce([tensor], opts)
 
 

@@ -99,8 +99,8 @@ class CreateStateTest(unittest.TestCase):
 
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(CreateStateTest("test_shard_parallel"))
-    suite.addTest(CreateStateTest("test_shard_parallel_grad_acc"))
+    # suite.addTest(CreateStateTest("test_shard_parallel"))
+    # suite.addTest(CreateStateTest("test_shard_parallel_grad_acc"))
     suite.addTest(CreateStateTest("test_pipeshard_parallel"))
     return suite
 

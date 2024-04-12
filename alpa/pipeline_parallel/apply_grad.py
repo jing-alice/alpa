@@ -8,9 +8,9 @@ from jax.core import (Primitive, Var, Jaxpr, ClosedJaxpr, DropVar, Literal,
                       get_aval, raise_to_shaped, JaxprEqn)
 from jax.interpreters import xla
 from jax.lax import add_p, div_p, and_p, or_p
-from jaxlib import xla_client as xc
+from jax._src.lib import xla_client as xc
 import numpy as np
-
+from functools import partial
 from alpa.pipeline_parallel.computation import JaxPipelineComputation
 from alpa.pipeline_parallel.primitive_def import (pipeline_p,
                                                   mark_pipeline_jaxpreqn)
@@ -687,12 +687,12 @@ def apply_grad_get_mean(apply_grad_jaxpr, global_outvars, gradients, gensym_fn,
     return new_jaxpr, global_outvars
 
 
-cross_mesh_allreduce_p = Primitive('__builtin$CrossMeshAllReduce')
+cross_mesh_allreduce_p = Primitive("__builtin$CrossMeshAllReduce")
 _primitive_to_str = {add_p: b'SUM', and_p: b'AND', or_p: b'OR'}
 
 
 def _cross_mesh_allreduce_xla_translation(c, *args, **kwargs):
-    call_name = b'__builtin$CrossMeshAllReduce'
+    call_name = b"__builtin$CrossMeshAllReduce"
     assert len(args) == 1
     input_params = args[0]
     input_shape = c.get_shape(input_params)
@@ -714,8 +714,23 @@ def _cross_mesh_allreduce_xla_translation(c, *args, **kwargs):
     return output
 
 
-xla.translations[cross_mesh_allreduce_p] = _cross_mesh_allreduce_xla_translation
+def _cross_mesh_allreduce_abstract_eval(*args, **kwargs):
+    return args[0]
 
+def cross_mesh_allreduce_prim(*args, **kwargs):
+
+    return cross_mesh_allreduce_p.bind(*args, **kwargs)
+
+
+cross_mesh_allreduce_p.def_abstract_eval(_cross_mesh_allreduce_abstract_eval)
+cross_mesh_allreduce_p.def_impl(partial(xla.apply_primitive, cross_mesh_allreduce_p))
+
+xla.translations[cross_mesh_allreduce_p] = _cross_mesh_allreduce_xla_translation
+# xla.register_translation(cross_mesh_allreduce_p, _cross_mesh_allreduce_xla_translation)
+# xc.register_custom_call_target(cross_mesh_allreduce_p, _cross_mesh_allreduce_xla_translation,platform='CUDA')
+
+# from jax.interpreters import mlir
+# mlir.register_lowering(cross_mesh_allreduce_p, _cross_mesh_allreduce_xla_translation)
 
 def _init_eqn_var_mesh(closed_jaxpr, var_mesh):
     eqn_mesh = []
@@ -884,6 +899,8 @@ class ApplyGradRewriter:
         # it can be improved by adding computation-communication tradeoff
         return (eqn.primitive in _reducable_operators and
                 eqn.outvars[0].aval.shape == ())
+
+        # return (eqn.primitive in _reducable_operators)
 
     def _forward_propagate(self):
         """

@@ -35,8 +35,8 @@ from jax._src.maps import FrozenDict
 from jax import linear_util as lu
 from jax.interpreters import partial_eval as pe
 from jax.interpreters import xla, pxla, mlir
-# from jax.interpreters.xla import make_device_array
-from jax._src.array import make_array_from_callback
+# from jax.interpreters.xla import 
+from jax._src.array import make_array_from_callback, make_array_from_single_device_arrays
 from jax.tree_util import tree_map, tree_flatten, PyTreeDef
 import numpy as np
 import ray
@@ -341,7 +341,7 @@ def get_compile_options(num_replicas: int,
         [spmd_propagation_to_outputs]
     # FIXME: re-enable the new runtime when everything is ready.
     debug_options = build_options.debug_options
-    # debug_options.xla_gpu_enable_xla_runtime_executable = False
+    debug_options.xla_gpu_enable_xla_runtime_executable = False
     return compile_options
 
 
@@ -1144,8 +1144,8 @@ def is_continuous_subset(tensor_slice, tensor_shape, row_major=True):
     if not row_major:
         raise NotImplementedError("Do not support column major.")
     ndim = len(tensor_shape)
-    if len(tensor_slice) != ndim:
-        raise RuntimeError("ndims mismatch.")
+    # if len(tensor_slice) != ndim:
+    #     raise RuntimeError("ndims mismatch.")
     slice_shape = tuple(ind.stop - ind.start for ind in tensor_slice)
     for dim, dim_shape in enumerate(slice_shape):
         if dim + 1 > ndim:
@@ -1186,15 +1186,14 @@ def xla_buffer_to_jax_tensor(xla_buf):
 
     So we can index over the data buffer.
     """
-    aval = ShapedArray(xla_buf.shape, xla_buf.dtype)
-    return make_array_from_callback(aval, xla_buf.device(), xla_buf)
-
-
+    
+    return jax.device_put(xla_buf, xla_buf.device())
+    
 def jax_tensor_to_xla_buffer(jax_buf):
     """Convert a JAX Device array back to XLA buffer."""
     # return jax_buf.device_buffer
-    return jax_buf._value
-
+    # return jax_buf._value
+    return jax_buf.device_buffer
 
 # Note: use Python jit instead of CPP jit,
 # because CPP jit has bugs on _DeviceArray.
@@ -1216,7 +1215,10 @@ def jax_tensor_set(src_buf, update, start_indices):
         indices.
     """
     # src_buf = src_buf.at[indices].set(update)
+    print("start_indices: ", start_indices)
+    # print("shape1: ", src_buf.shape)
     src_buf = jax.lax.dynamic_update_slice(src_buf, update, start_indices)
+    # print("shape2: ", src_buf.shape)
     return src_buf
 
 

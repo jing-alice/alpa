@@ -1,3 +1,4 @@
+import logging
 import unittest
 
 import ray
@@ -6,7 +7,8 @@ from alpa.device_mesh import (
     create_and_record_cross_mesh_collective_communicators, get_global_cluster)
 from alpa.pipeline_parallel.stage_construction import get_sliced_virtual_submeshes
 from alpa.util import mesh_ids_hash
-
+logger = logging.getLogger(__name__)
+logger.setLevel(5)
 
 class CrossMeshCollectiveCommunicatorTest(unittest.TestCase):
 
@@ -14,9 +16,12 @@ class CrossMeshCollectiveCommunicatorTest(unittest.TestCase):
         init("ray")
 
     def test_create_and_set(self):
-        virtual_mesh = get_global_cluster().get_virtual_physical_mesh(
-            host_ids=[0], num_devices_per_host=4)
-        submesh_shapes = [(1, 2)] * 2
+        virtual_mesh = get_global_cluster().get_virtual_physical_mesh(host_ids=[0,1], num_devices_per_host=1
+            )
+        # host_ids=[0], num_devices_per_host=2
+        # submesh_shapes = [(1, 1),(1, 1), (1, 1), (1, 1)] * 1
+        submesh_shapes = [(1, 1)] * 2
+        # submesh_shapes = [(1, 1),(1, 1)] * 1
         sliced_virtual_meshes = get_sliced_virtual_submeshes(
             virtual_mesh, submesh_shapes)
         virtual_mesh.get_physical_mesh_group(sliced_virtual_meshes)

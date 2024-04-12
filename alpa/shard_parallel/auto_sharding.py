@@ -344,8 +344,6 @@ def run_auto_sharding_pass(
             "auto_sharding::force_strategy_stra_names": [],
     }):
         timers("auto-sharding").start()
-        print("hlo: ", hlo.get_module())
-        print("compile_options: ", compile_options)
         xe.run_auto_sharding(hlo.get_module(), compile_options)
         timers("auto-sharding").stop()
     hlo.status = HloStatus.SHARDING_ANNOTATED
@@ -419,7 +417,9 @@ def run_backend_compilation(
         num_devices: int,
         bypass_device_assignment_check: bool = False,
         rewrite_for_grad_acc: bool = False,
-        rewrite_grad_acc_indices: Optional[Sequence[int]] = None):
+        rewrite_grad_acc_indices: Optional[Sequence[int]] = None,
+        exe_id = None,
+        mesh_id = None):
     """Compile a spmd partitioned Hlo Module to an XLA executable.
 
     Args:
@@ -459,6 +459,29 @@ def run_backend_compilation(
             "done-event::enable":
                 global_config.enable_overlapping,
     }):
+        if mesh_id==1:
+        #     print("num_partitions:", num_devices)
+        #     print("build_random_seed:", stage_plan.build_random_seed)
+        #     print({
+        #         # Gradient accumulation rewrite:
+        #         "auto_sharding::rewrite_for_grad_acc": rewrite_for_grad_acc,
+        #         "auto_sharding::rewrite_indices": rewrite_grad_acc_indices,
+        #         # Build options
+        #         "build_option::bypass_device_assignment_check":
+        #             bypass_device_assignment_check,
+
+        #         # Communication combiner options
+        #         "combiner::all_gather_threshold":
+        #             stage_plan.all_gather_threshold,
+        #         "combiner::all_reduce_threshold":
+        #             stage_plan.all_reduce_threshold,
+        #         "done-event::enable":
+        #             global_config.enable_overlapping,
+        #         })
+            print(f"./vgg_hlo{mesh_id}_compilation.txt000")
+            with open(f"./vgg_hlo{mesh_id}_compilation.txt","w+") as f:
+                print(f"./vgg_hlo{mesh_id}_compilation.txt")
+                f.write(xla_computation_to_mlir_text(hlo.get_computation()))    
         compiled = backend.compile(
             xla_computation_to_mlir_text(hlo.get_computation()),
             compile_options)

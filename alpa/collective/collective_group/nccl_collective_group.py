@@ -463,7 +463,6 @@ class NCCLGroup(BaseGroup):
         self.xla_comm_group.nccl_create_communicators(actual_world_size,
                                                       actual_ranks, local_ids,
                                                       nccl_uid)
-
         xe.set_comm_group_info(key, self.xla_comm_group, nccl_uid)
         self._xla_comm_keys.add(comm_key)
 
@@ -569,8 +568,7 @@ class NCCLGroup(BaseGroup):
         group_uid = nccl_util.get_nccl_unique_id()
         return group_uid
 
-    @staticmethod
-    def _generate_nccl_uid(key):
+    def _generate_nccl_uid(self, key):
         """Generate an NCCL unique ID for initializing communicators.
 
         The method will also create a KV store using Ray named actor and store
@@ -587,9 +585,9 @@ class NCCLGroup(BaseGroup):
         store_name = get_store_name(key)
         # Avoid a potential circular dependency in ray/actor.py
         from alpa.collective.util import NCCLUniqueIDStore  # pylint: disable=import-outside-toplevel
-        store = NCCLUniqueIDStore.options(
-            name=store_name, lifetime="detached").remote(store_name)
-        ray.get([store.set_id.remote(group_uid)])
+        self._store = NCCLUniqueIDStore.options(
+            name=store_name,lifetime='detached').remote(store_name)
+        ray.get([self._store.set_id.remote(group_uid)])
         return group_uid
 
     def _collective(self,

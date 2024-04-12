@@ -93,7 +93,6 @@ def recv_tile(worker, uuid: int, device_id: int,
         new_buffer = jax_tensor_set(xla_buffer_to_jax_tensor(buffer),
                                     xla_buffer_to_jax_tensor(to_recv),
                                     start_indices)
-        print("new: ", new_buffer)
         worker.buffers[uuid][device_id] = jax_tensor_to_xla_buffer(new_buffer)
 
 
@@ -161,7 +160,6 @@ def broadcast(worker, uuid, comm_key, world_size, devices_ids,
     col.broadcast_partialgpu(buffers, n_elements, comm_key, world_size,
                              devices_ids, devices_global_rank, group_name,
                              local_start_pos_list)
-    print("buffers: ", buffers)
     for xla_buffer, device_id, global_rank, tensor_slice in zip(
             buffers, devices_ids, devices_global_rank, tensor_slices):
         if global_rank == 0:
@@ -171,14 +169,12 @@ def broadcast(worker, uuid, comm_key, world_size, devices_ids,
         slice_shape = tuple(ind.stop - ind.start for ind in tensor_slice)
         if is_continuous_subset(tensor_slice, tensor_shape):
             new_buffer = xla_buffer
-            print("new_buffer1: ", new_buffer)
         else:
             start_indices = tuple(
                 ind_in_dst.start for ind_in_dst in tensor_slice)
             # let compute stream wait for communicator stream
             is_send = global_rank == 0
             col.compute_wait_comm(group_name, is_send, True, device_id)
-            print("new_buffer2: ", buffer)
             buf = xla_buffer_to_jax_tensor(buffer)
             xla_buf = xla_buffer_to_jax_tensor(xla_buffer)
             new_buffer = jax_tensor_set(buf, xla_buf, start_indices)

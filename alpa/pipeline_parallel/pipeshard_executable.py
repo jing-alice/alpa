@@ -150,6 +150,7 @@ class PipeshardDriverExecutable:
         Args:
             args: The original arguments of the parallelized function.
         """
+        
         input_bufs = [None for _ in range(self.num_mesh)]
         output_bufs = [None for _ in range(self.num_mesh)]
         output_uuids = [None for _ in range(self.num_mesh)]
@@ -464,9 +465,8 @@ class PipeshardMeshWorkerExecutable:
         # Executable management
         self._related_exec_uuids = []
         self.partial_grad_exec_uuids = OrderedSet()
-
         # Compile executables
-        for task_config in executable_configs:
+        for i, task_config in enumerate(executable_configs):
             self._related_exec_uuids.append(task_config.exec_uuid)
             if isinstance(task_config, PartialGradWorkerExecutableConfig):
                 self.worker.put_executable(task_config.exec_uuid,
@@ -504,7 +504,6 @@ class PipeshardMeshWorkerExecutable:
         # load the local env
         self.worker.buffers = buffers
         sync_func = self.worker.sync if sync_for_timer else None
-
         # Setup tracer
         if collect_trace:
             log_run_begin = partial(tracer.log,
@@ -520,25 +519,37 @@ class PipeshardMeshWorkerExecutable:
 
         # Execute
         timers(self.exec_timer_name).start(sync_func=sync_func)
-
-        for instruction in self.instructions:
+        for i, instruction in enumerate(self.instructions):
             #print(f"memory_allocated: "
             #      f"{self.worker.get_memory_allocated()/1024**3:.3f} GB  "
             #      f"max_memory_allocated: "
             #      f"{self.worker.get_max_memory_allocated()/1024**3:.3f} GB "
             #      f"next instruction: {instruction}", flush=True)
-
+            
+            # if self.worker.mesh_id == 1:
+            #     print("##########################################")
+            #     print(f"i: {i} mesh_id: {self.worker.mesh_id}")
+            #     print("##########################################")
+            # if self.worker.mesh_id == 0:
+            #     continue
+            # if i != 14:
+            #     continue
+           
             if instruction.opcode == PipelineInstType.RUN:
+                # print("run")
                 log_run_begin(instruction.info, sync_func=sync_func)
                 self.worker.run_executable(instruction.task_uuid,
                                            instruction.input_uuids,
                                            instruction.output_uuids,
-                                           **instruction.opaques["kwargs"])
+                                           **instruction.opaques["kwargs"],
+                                           i=i)
                 log_run_end(instruction.info, sync_func=sync_func)
             elif instruction.opcode == PipelineInstType.SEND:
+                # print("send")
                 self.worker.run_resharding_send_task(instruction.task_uuid,
                                                      instruction.input_uuids[0])
             elif instruction.opcode == PipelineInstType.RECV:
+                # print("recv")
                 self.worker.run_resharding_recv_task(
                     instruction.task_uuid, instruction.output_uuids[0],
                     instruction.opaques["set_empty_buffer"])
@@ -557,7 +568,6 @@ class PipeshardMeshWorkerExecutable:
                 self.worker.delete_buffers(instruction.input_uuids)
 
         timers(self.exec_timer_name).stop(sync_func=sync_func)
-
         # copy to global env
         assert len(self.output_local_uuids) == len(output_global_uuids)
         for local_id, global_id in zip(self.output_local_uuids,
@@ -566,6 +576,7 @@ class PipeshardMeshWorkerExecutable:
         # restore global environment
         self.worker.buffers = self.global_buffers
         buffers.clear()
+        # print("restore global")
         if global_config.enable_overlapping:
             xe.reset_event_context(self.worker.backend)
 

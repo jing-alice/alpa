@@ -108,12 +108,11 @@ class VGG16(Module):
 
     return x
   
-
-
-# @alpa.parallelize(method=alpa.DataParallel(),batch_argnums=(1,2))
-# @alpa.parallelize(method=alpa.PipeshardParallel(stage_option=UniformStageOption(num_stages=2),num_micro_batches=10),batch_argnums=(1,2))
-# @alpa.parallelize(method=alpa.PipeshardParallel(num_micro_batches=10),batch_argnums=(1,2))
-@alpa.parallelize(method=alpa.PipeshardParallel(stage_option=UniformStageOption(num_stages=2),num_micro_batches=10,pipeline_schedule="gpipe"),batch_argnums=(1,2))
+#@e(method=alpa.PipeshardParallel(stage_option=UniformStageOption(num_stages=2),num_micro_batches=10),batch_argnums=(1,2))
+# @alpa.parallelize(batch_argnums=(1,2))
+# @alpa.parallelize(method=alpa.PipeshardParallel(layer_option=AutoLayerOption(layer_num=2),stage_option=UniformStageOption(num_stages=2),num_micro_batches=10),batch_argnums=(1,2))
+# @alpa.parallelize(method=alpa.ShardParallel(),batch_argnums=(1,2))
+@alpa.parallelize(method=alpa.PipeshardParallel(layer_option=AutoLayerOption(layer_num=2), stage_option=UniformStageOption(num_stages=2),num_micro_batches=10),batch_argnums=(1,2))
 def train_step(state, data, label):
   def loss_fn(params):
     logits = state.apply_fn(params, data)
@@ -125,9 +124,10 @@ def train_step(state, data, label):
   (loss, logits), grads = grad_fn(state.params)
   state = state.apply_gradients(grads=grads)
   return state, loss
- 
 
 
+#@alpa.parallelize(method=alpa.PipeshardParallel(stage_option=UniformStageOption(num_stages=2),num_micro_batches=10,pipeline_schedule="inference"),donate_argnums=(),batch_argnums=(1,2))
+# @alpa.parallelize(batch_argnums=(1,2),donate_argnums=())
 @alpa.parallelize(method=alpa.PipeshardParallel(stage_option=UniformStageOption(num_stages=2),num_micro_batches=10,pipeline_schedule="inference"),donate_argnums=(),batch_argnums=(1,2))
 def test_step(state, data, label):
   logits = state.apply_fn(state.params, data)
@@ -146,14 +146,14 @@ train_data = CIFAR10(
 test_data = CIFAR10(
   DATASETS_DIR, train=False, download=True, transform=Compose([Normalize(mean=(0, 0, 0), std=(1.0, 1.0, 1.0))]))
 
-# need add one_hot operation
+# need add ont_hot operation
 train_loader = DataLoader(train_data, batch_size=100)
 test_loader = DataLoader(test_data, batch_size=100)
 
 def create_train_state():
   """Creates initial `TrainState`."""
   cnn = VGG16()
-  params = cnn.init(jnp.ones([1, 32, 32, 3]), train=False)
+  params = cnn.init(jnp.ones([1, 28, 28, 3]), train=False)
   tx = adamw(learning_rate=0.0003, weight_decay=5e-4)
   return train_state.TrainState.create(
       apply_fn=cnn.run, params=params, tx=tx)
@@ -170,11 +170,11 @@ def train_and_test():
         # jax.debug.visualize_array_sharding(state.params['param']['Conv2d_0']["weight"])
         tepoch.set_postfix(loss=loss._value)
 
-    # with tqdm.tqdm(test_loader) as tepoch:
-    #   tepoch.set_description("Testing")
-    #   for batch in tepoch:
-    #     loss_val, acc_val = test_step(state, batch[0], batch[1])
-    #     tepoch.set_postfix(loss=loss_val._value, acc=acc_val._value)
+    with tqdm.tqdm(test_loader) as tepoch:
+      tepoch.set_description("Testing")
+      for batch in tepoch:
+        loss_val, acc_val = test_step(state, batch[0], batch[1])
+        tepoch.set_postfix(loss=loss_val._value, acc=acc_val._value)
 
   return state
 

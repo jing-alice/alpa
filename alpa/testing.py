@@ -40,7 +40,10 @@ def assert_allclose(x, y, rtol=1e-4, atol=1e-4):
     elif hasattr(x, "__array__") or np.isscalar(x):
         assert hasattr(y, "__array__") or np.isscalar(y), f"{y}"
         x = np.asarray(x)
-        y = np.asarray(y)
+        # print("x: ", x)
+        # print("y: ", y)
+        if hasattr(y, "_value"): 
+            y = np.asarray(y._value)
         np.testing.assert_allclose(x, y, rtol, atol)
     elif isinstance(x, TrainState):
         assert isinstance(y, TrainState)

@@ -287,7 +287,6 @@ class XLANCCLGroup(BaseGroup):
         """
 
         buffer = tensors[0]
-        print("buffer: ",buffer)
         my_gpu_idx = xe.get_buffer_device_id(buffer)
         peer_rank, peer_gpu_idx = \
             recv_options.src_rank, recv_options.src_gpu_index
@@ -348,8 +347,7 @@ class XLANCCLGroup(BaseGroup):
         group_uid = xla_nccl_util.get_nccl_unique_id()
         return group_uid
 
-    @staticmethod
-    def _generate_nccl_uid(key):
+    def _generate_nccl_uid(self, key):
         """Generate an NCCL unique ID for initializing communicators.
 
         The method will also create a KV store using Ray named actor and store
@@ -366,9 +364,9 @@ class XLANCCLGroup(BaseGroup):
         store_name = get_store_name(key)
         # Avoid a potential circular dependency in ray/actor.py
         from alpa.collective.util import NCCLUniqueIDStore  # pylint: disable=import-outside-toplevel
-        store = NCCLUniqueIDStore.options(
-            name=store_name, lifetime="detached").remote(store_name)
-        ray.get([store.set_id.remote(group_uid)])
+        self._store = NCCLUniqueIDStore.options(
+            name=store_name).remote(store_name)
+        ray.get([self._store.set_id.remote(group_uid)])
         return group_uid
 
     # unimplemented

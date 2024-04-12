@@ -717,7 +717,7 @@ def generate_sharded_xla_computations_arguments(
 
     Similar to generate_sharded_xla_computations but only generate arguments.
     """
-    invars = OrderedSet()
+    invars = OrderedSet() 
     outvars = OrderedSet()
     donation_mapping = {}
     eqns = []

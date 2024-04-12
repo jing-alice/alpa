@@ -16,6 +16,7 @@ from jax._src.interpreters import xla
 import jax.numpy as jnp
 from jax._src.api import ShapeDtypeStruct
 from jax._src.lib import xla_client as xc, xla_extension as xe
+from jax.lib import xla_bridge as xb
 from jax.core import ShapedArray
 from jax.interpreters import pxla
 from jax.tree_util import tree_flatten, tree_unflatten, tree_leaves, PyTreeDef
@@ -286,7 +287,7 @@ class NormalMeshDriverExecutable(MeshDriverExecutable):
             # Execute the SPMD binary
             for i in range(num_hosts):
                 physical_mesh.workers[i].run_executable.remote(
-                    self.exec_uuid, input_uuids, output_uuids, **kwargs)
+                    self.exec_uuid, input_uuids, output_uuids, **kwargs, i=i)
 
             # Gather output buffers
             output_bufs = np.array(
@@ -437,8 +438,17 @@ class NormalMeshWorkerExecutable(MeshWorkerExecutable):
 
         kwargs = self._get_compilation_args()
 
+        # worker.backend = xb.get_backend('gpu')
+        print(f"{worker.host_id=}")
         self.compiled = run_backend_compilation(worker.backend, hlo, stage_plan,
-                                                num_devices, **kwargs)
+                                                num_devices, **kwargs, exe_id=uuid, mesh_id=worker.host_id)
+
+        fully_optimized_hlo_proto = self.compiled.hlo_modules()[0].to_string()
+        if worker.host_id==1:
+            print(f"./vgg_fully_optimized_hlo_text.txt000   {len(self.compiled.hlo_modules())=}")
+            with open(f"./vgg_fully_optimized_hlo_proto","w+") as f:
+                print(f"./vgg_fully_optimized_hlo_proto.txt")
+                f.write(fully_optimized_hlo_proto)
         self.donated_invars = donated_invars
         self.worker = worker
 
@@ -449,32 +459,39 @@ class NormalMeshWorkerExecutable(MeshWorkerExecutable):
     def _get_compilation_args(self):
         return {}
 
+
     def execute_on_worker(self, input_uuids: Sequence[int],
                           output_uuids: Sequence[int], sync_before: bool,
-                          sync_after: bool):
+                          sync_after: bool, i:int):
         """Run the executable on the worker."""
         buffer_dict = self.worker.buffers
-
+        print("Normal of output uuid: ", output_uuids)
         # Get input buffers from uuids
         # Sequence[Sequence[DeviceBuffer]], shape(num_args, num_devices)
         input_bufs = [buffer_dict[x] for x in input_uuids]
-
+        # print("input_bufs: ", input_bufs[-2][0].shape, len(input_bufs[-1]))
+        # print([((i_b[0].shape,i_b[0].dtype),(i_b[1].shape,i_b[1].dtype)) for i_b in input_bufs])
         if global_config.enable_overlapping:
             xe.computation_wait_events(input_uuids, self.worker.backend)
             xe.set_idx_to_uuid(output_uuids)
         # Execute the executable
         timers(self.timer_name).start(self.sync_func if sync_before else None)
         try:
+            # print("execute_sharded_on_local_devices")
+            # breakpoint()
             output_bufs = self.compiled.execute_sharded_on_local_devices(
                 input_bufs)
+            # print("output_bufs in try")
+            # print("out_bufs: ", output_bufs)
         except RuntimeError:
             ray.actor.exit_actor()
         timers(self.timer_name).stop(self.sync_func if sync_after else None)
 
         # Store output buffers
         for i in range(len(output_uuids)):
+            if output_uuids[i] == 30:
+                print("output_uuid: ", output_uuids[i], np.asarray(output_bufs[i]).shape)
             buffer_dict[output_uuids[i]] = output_bufs[i]
-
         # Delete donated input buffers
         delete_donated_buffers(buffer_dict, input_uuids, self.donated_invars)
 
@@ -887,7 +904,6 @@ class GradAccMeshWorkerExecutable(MeshWorkerExecutable):
             buffer_dict[first_batch_uuids[i]]
             for i in self.accumulate_grad_invar_indices
         ]
-
         # Prepare gradient buffers
         timers(self.timer_name).start(self.sync_func if sync_before else None)
         grad_bufs = self.allocate_zero_buffers.execute_sharded_on_local_devices(
@@ -1032,13 +1048,14 @@ class PartialGradAccMeshWorkerExecutable(NormalMeshWorkerExecutable):
 
     # pylint: disable=arguments-differ
     def execute_on_worker(self, input_uuids: Sequence[int],
-                          output_uuids: Sequence[int], sync_before: bool,
-                          sync_after: bool, skip_grad_sync: bool):
+                          output_uuids: Sequence[int],  sync_before: bool,
+                          sync_after: bool, skip_grad_sync: bool, i: int=0):
         """Run the executable on the worker."""
         os.environ[self.skip_allreduce_env_name] = (self.grad_sync_channel_ids
                                                     if skip_grad_sync else "")
+        print("Partical of output uuid: ", output_uuids)
         return super().execute_on_worker(input_uuids, output_uuids, sync_before,
-                                         sync_after)
+                                         sync_after,  i)
 
     def profile_with_dummy_inputs(self, backend, local_devices, skip_grad_sync):
         """Profile the time cost of this executable with dummy inputs."""
@@ -1119,17 +1136,16 @@ class AllocZeroBufferWorkerExecutable(MeshWorkerExecutable):
         self.allocate_zero_buffers = compile_allocate_zero_buffers(
             worker.backend, num_devices, grad_shard_shapes, grad_shard_dtypes)
         self.worker = worker
-
         self.timer_name = get_execution_timer_name(uuid)
         self.sync_func = get_sync_func_worker(worker)
 
     def execute_on_worker(self, input_uuids: Sequence[int],
                           output_uuids: Sequence[int], sync_before: bool,
-                          sync_after: bool):
+                          sync_after: bool, i:int=0):
         """Run the executable on the worker."""
         # pylint: disable=unused-argument
         buffer_dict = self.worker.buffers
-
+        print("allocate zero of output uuid: ", output_uuids)
         # Execute
         if global_config.enable_overlapping:
             xe.set_idx_to_uuid(output_uuids)
@@ -1158,7 +1174,7 @@ class UtilMeshWorkerExecutable(MeshWorkerExecutable):
             num_replicas=1,
             num_partitions=num_devices,
             device_assignment=np.arange(num_devices).reshape((1, -1)),
-            use_spmd_partitioning=True,
+            use_spmd_partitioning=False,
             parameter_is_tupled_arguments=False,
             build_random_seed=global_config.compile_random_seed)
 
@@ -1174,10 +1190,10 @@ class UtilMeshWorkerExecutable(MeshWorkerExecutable):
 
     def execute_on_worker(self, input_uuids: Sequence[int],
                           output_uuids: Sequence[int], sync_before: bool,
-                          sync_after: bool):
+                          sync_after: bool, i:int = 0):
         """Run the executable on the worker."""
         buffer_dict = self.worker.buffers
-
+        print("Util mesh of out put uuid: ", output_uuids)
         # Get input
         input_bufs = [buffer_dict[x] for x in input_uuids]
 

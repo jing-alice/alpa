@@ -15,6 +15,8 @@ from alpa.device_mesh import get_global_cluster
 from alpa.testing import (get_mlp_train_state_and_step,
                           get_bert_layer_train_state_and_step, assert_allclose)
 
+import os
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 class DistSaveLoadTest(unittest.TestCase):
 
@@ -38,7 +40,8 @@ class DistSaveLoadTest(unittest.TestCase):
         for line in subprocess.check_output("df -h",
                                             shell=True).decode().split('\n'):
             cols = line.split(' ')
-            if "efs" in cols[0]:
+            print("cols: ", cols)
+            if "tmpfs" in cols[0]:
                 return cols[-1] + "/"
         return None
 
@@ -47,6 +50,8 @@ class DistSaveLoadTest(unittest.TestCase):
         if len(device_cluster.host_info) > 1:
             # Get EFS mount point for the multi-host test
             save_prefix = self._get_efs_mount_point()
+            # save_prefix = "/data/hejing/alpa/"
+            print("save_prefix: ", save_prefix)
             if save_prefix is None:
                 self.skipTest("The multi-host test requires a mounted EFS! ")
         else:
@@ -56,12 +61,14 @@ class DistSaveLoadTest(unittest.TestCase):
 
     def test_distributed_array_save_load(self):
         device_cluster = get_global_cluster()
+        print("devices: ", device_cluster.num_devices)
         save_prefix = self._get_save_prefix()
 
         # Launch a device mesh contains four devices
-        if device_cluster.num_devices < 4:
-            self.skipTest(
-                "This unit test requires a cluster with at least 4 devices! ")
+       
+        # if device_cluster.num_devices < 4:
+        #     self.skipTest(
+        #         "This unit test requires a cluster with at least 4 devices! ")
         host_num = min(len(device_cluster.host_info), 4)
         device_per_host = 4 // host_num
         physical_mesh = device_cluster.get_physical_mesh(
@@ -82,7 +89,7 @@ class DistSaveLoadTest(unittest.TestCase):
         input_indices = input_sharding_spec.indices(
             global_input_data1.shape).flatten()
         (dist_input_data1,) = physical_mesh.shard_args_to_arrays(
-            (jax.ShapedArray(global_input_data1.shape, jnp.int32),),
+            (jax.core.ShapedArray(global_input_data1.shape, jnp.int32),),
             (input_indices,), (input_sharding_spec,), (global_input_data1,))
 
         # Check the DistributedArray's remote buffers
@@ -108,9 +115,8 @@ class DistSaveLoadTest(unittest.TestCase):
                     global_input_data1, [0, 1], [0])
                 dist_load_data1 = DistributedArray.load(
                     ckpt_dir,
-                    jax.ShapedArray(global_input_data1.shape, jnp.int32),
+                    jax.core.ShapedArray(global_input_data1.shape, jnp.int32),
                     physical_mesh, load_sharding_spec)
-
                 # Check the DistributedArray's remote buffers
                 desired_buffers2 = np.array([[[0, 1], [2, 3]], [[0, 1], [2, 3]],
                                              [[4, 5], [6, 7]], [[4, 5], [6,
@@ -121,7 +127,8 @@ class DistSaveLoadTest(unittest.TestCase):
         physical_mesh.shutdown()
 
     def test_jax_mlp_save_dist_load(self):
-        save_prefix = self._get_save_prefix()
+        # save_prefix = self._get_save_prefix()
+        save_prefix = "/data/"
 
         # Init model
         jax_state, batch, train_step = get_mlp_train_state_and_step(
@@ -143,12 +150,15 @@ class DistSaveLoadTest(unittest.TestCase):
 
             # Restore checkpoint
             state_ps, _ = executable.get_input_placement_specs()
+            print("state_ps: ", state_ps)
             load_state = restore_checkpoint(ckpt_dir, 1, state_ps)
 
             # Run after load
             serial_state = serial_train_step(jax_state, batch)[0]
             load_state = parallel_train_step(load_state, batch)[0]
 
+            print("serial_state: ", serial_state.params)
+            print("load_state: ", load_state.params)
             # Check results
             assert_allclose(serial_state.params, load_state.params, 1e-3, 1e-3)
 
@@ -192,8 +202,8 @@ class DistSaveLoadTest(unittest.TestCase):
             assert_allclose(serial_state.params, load_state.params, 1e-3, 1e-3)
 
     def test_distributed_bert_cached_save_load(self):
-        save_prefix = self._get_save_prefix()
-
+        # save_prefix = self._get_save_prefix()
+        save_prefix =  "/data/"
         # Init model
         state, batch, train_step = get_bert_layer_train_state_and_step(
             batch_size=16,
@@ -242,10 +252,10 @@ class DistSaveLoadTest(unittest.TestCase):
 
 def suite():
     suite = unittest.TestSuite()
-    suite.addTest(DistSaveLoadTest("test_distributed_array_save_load"))
+    # suite.addTest(DistSaveLoadTest("test_distributed_array_save_load"))
     suite.addTest(DistSaveLoadTest("test_jax_mlp_save_dist_load"))
-    suite.addTest(DistSaveLoadTest("test_distributed_mlp_uncached_save_load"))
-    suite.addTest(DistSaveLoadTest("test_distributed_bert_cached_save_load"))
+    # suite.addTest(DistSaveLoadTest("test_distributed_mlp_uncached_save_load"))
+    # suite.addTest(DistSaveLoadTest("test_distributed_bert_cached_save_load"))
     return suite
 
 

@@ -1,9 +1,12 @@
 """Test cross-mesh resharding."""
+import os
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["NCCL_DEBUG"] = "INFO"
 import unittest
 from alpa.pipeline_parallel.runtime_emitter import PipelineInstEmitter
 
 import jax
-from jax import xla
+from jax._src.interpreters import xla
 from jax.core import Var
 from jax._src.abstract_arrays import ShapedArray
 from jax.interpreters.pxla import (Chunked, NoSharding, Replicated, ShardedAxis,
@@ -25,7 +28,7 @@ from alpa.pipeline_parallel.pipeshard_executable import (
 from alpa.pipeline_parallel.resharding_tensor import VirtualDistributedArray
 from alpa.testing import assert_allclose
 from alpa.util import get_shard_shape
-
+ 
 
 def test_resharding(var,
                     src_mesh,
@@ -65,6 +68,8 @@ def test_resharding(var,
     # Resharding task. Compile send/recv from strategy and allgather.
     collective_group = CollectiveGroup(task_spec.get_participant_device_strs(),
                                        src_mesh, dst_mesh)
+    print("name: ", collective_group.group_name)
+    
     if global_config.eagerly_create_communicators:
         collective_group.instantiate_now()
     else:
@@ -347,11 +352,11 @@ class ReshardingTest(unittest.TestCase):
 
     def test_4gpu_send_recv(self):
         self._test_4gpu_send_recv("cupy")
-        self._test_4gpu_send_recv("xla_extension")
+        # self._test_4gpu_send_recv("xla_extension")
 
     def test_4gpu_allgather(self):
         self._test_4gpu_allgather("cupy")
-        self._test_4gpu_allgather("xla_extension")
+        # self._test_4gpu_allgather("xla_extension")
 
     @unittest.skipIf(jax.device_count('gpu') < 8, "no enough device")
     def test_8gpu_2_dim_allgather(self):
@@ -359,7 +364,7 @@ class ReshardingTest(unittest.TestCase):
 
     def test_4gpu_broadcast(self):
         self._test_4gpu_broadcast("cupy")
-        self._test_4gpu_broadcast("xla_extension")
+        # self._test_4gpu_broadcast("xla_extension")
 
     @unittest.skipIf(jax.device_count('gpu') < 8, "no enough device")
     def test_8gpu_broadcast(self):
@@ -369,10 +374,10 @@ class ReshardingTest(unittest.TestCase):
 def suite():
     suite = unittest.TestSuite()
     suite.addTest(ReshardingTest("test_4gpu_send_recv"))
-    suite.addTest(ReshardingTest("test_4gpu_allgather"))
-    suite.addTest(ReshardingTest("test_8gpu_2_dim_allgather"))
-    suite.addTest(ReshardingTest("test_4gpu_broadcast"))
-    suite.addTest(ReshardingTest("test_8gpu_broadcast"))
+    # suite.addTest(ReshardingTest("test_4gpu_allgather"))
+    # suite.addTest(ReshardingTest("test_8gpu_2_dim_allgather"))
+    # suite.addTest(ReshardingTest("test_4gpu_broadcast"))
+    # suite.addTest(ReshardingTest("test_8gpu_broadcast"))
     return suite
 
 

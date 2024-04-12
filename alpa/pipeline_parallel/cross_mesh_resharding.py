@@ -144,6 +144,8 @@ class EagerReshardingTask(ReshardingTask):
                                                       receiver, remote_ref.uuid)
 
         # Now construct the distributed array
+        
+        print("src_array: ", src_array)
         dst_array = DistributedArray(self.dst_mesh, src_array.aval,
                                      self.task_spec.dst_sharding_spec,
                                      remote_ref, self.task_spec.dst_indices)
@@ -369,6 +371,7 @@ class SymbolicReshardingTask(ReshardingTask):
             logger.debug("Precompiled tasks launched.")
             ray.get(results)
         # Now construct the distributed array
+        print("src_array: ", src_array)
         dst_array = DistributedArray(self.dst_mesh, src_array.aval,
                                      self.task_spec.dst_sharding_spec,
                                      result_ref, self.task_spec.dst_indices)
@@ -644,6 +647,7 @@ class CollectiveGroup:
         logger.debug(
             "Trying to create ray.collective groups among participants.")
         for rank, worker in enumerate(self.mesh_workers):
+            print("rank and worker is: ", rank, worker)
             task_dones.append(
                 worker.init_collective_group.remote(world_size, rank, "nccl",
                                                     self.group_name))
