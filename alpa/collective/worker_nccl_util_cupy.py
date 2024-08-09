@@ -3,14 +3,19 @@ import logging
 from typing import Sequence
 
 import cupy
+import jax
 import jax.numpy as jnp
 from jax import device_put
 from jax._src.dlpack import from_dlpack, to_dlpack
-from jax._src.lib import xla_bridge as xb, xla_client as xc
+from jax.lib import (
+    xla_bridge as xb,
+    xla_client as xc,
+)
 import numpy as np
 
 import alpa.collective as col
 from alpa.collective.collective_group import nccl_util
+from alpa.collective.collective import synchronize
 from alpa.util import (jax_tensor_set, jax_tensor_index,
                        xla_buffer_to_jax_tensor, jax_tensor_to_xla_buffer,
                        is_continuous_subset, infer_offset_and_n_elements)
@@ -43,6 +48,9 @@ def send_tile(worker, uuid: int, device_id: int, offset: Sequence[slice],
         # fast path, two cases: (1) same shape, (2) continuous subset.
         slice_shape = tuple(ind.stop - ind.start for ind in offset)
         to_send = xla_buffer_to_cupy(buffer)
+        # print("send1: ", to_send)
+        synchronize(device_id)
+        print("to_send: ", type(to_send), to_send.shape)
         if slice_shape == tensor_shape:
             col.send_multigpu(to_send, dst_rank, dst_gpu_idx, group_name)
         else:
@@ -62,6 +70,7 @@ def send_tile(worker, uuid: int, device_id: int, offset: Sequence[slice],
         src_buffer = jax_tensor_index(xla_buffer_to_jax_tensor(buffer),
                                       start_indices, slice_sizes)
         to_send = jax_tensor_to_cupy(src_buffer)
+        print("send2: ", to_send)
         col.send_multigpu(to_send, dst_rank, dst_gpu_idx, group_name)
 
 
@@ -86,7 +95,8 @@ def recv_tile(worker, uuid: int, device_id: int,
     buffer = worker.buffers[uuid][device_id]
     tensor_shape = buffer.shape
     slice_shape = tuple(ind.stop - ind.start for ind in indices_in_dst_tile)
-    is_bool = buffer.dtype == np.bool_
+    is_bool = jnp.array(buffer).dtype == np.bool_
+    print("uuid of recv: ", uuid)
     if is_continuous_subset(indices_in_dst_tile, tensor_shape):
         to_recv = xla_buffer_to_cupy(buffer, take_ownership=True)
         if slice_shape == tensor_shape:
@@ -98,7 +108,9 @@ def recv_tile(worker, uuid: int, device_id: int,
                               src_gpu_idx,
                               group_name,
                               n_elements=n_elements)
+        synchronize(device_id)
         new_buffer = cupy_to_xla_buffer(to_recv)
+        # print("new_buffer1ofrecv: ", new_buffer)
     else:
         # The following call will allocate memory and cause a few H2D and
         # D2D kernels.
@@ -106,25 +118,56 @@ def recv_tile(worker, uuid: int, device_id: int,
         logger.debug("Recv goes along the slowest path. "
                      "If this is for transformers, please check the resharding "
                      "specs.")
-        tmp_buffer = device_put(jnp.ones(slice_shape, dtype=buffer.dtype),
-                                worker.local_devices[device_id])
+        tmp_buffer = device_put(jnp.ones(slice_shape), worker.local_devices[device_id])
+        
         to_recv = jax_tensor_to_cupy(tmp_buffer, take_ownership=True)
-        col.recv_multigpu(to_recv, src_rank, src_gpu_idx, group_name)
-        recv_tensor = cupy_to_jax_tensor(to_recv)
+        n_elements = np.prod(slice_shape)
+        print("n_elements: ", n_elements)
+        
+        col.recv_multigpu(to_recv, src_rank, src_gpu_idx, group_name, n_elements)
+        # recv_tensor = cupy_to_jax_tensor(to_recv)
+        recv_tensor = cupy_to_xla_buffer(to_recv)
+        
         start_indices = tuple(
             ind_in_dst.start for ind_in_dst in indices_in_dst_tile)
-
+        print("start_indices: ", start_indices)
         # The following in-place write will cause a D2D copy kernel
         # See: https://github.com/alpa-projects/alpa/issues/144
         # It is unavoidable, but it is better than:
         # new_buffer = dynamic_update_slice(src_buf, update, start_indices)
         # which is not in-place and will cause extra allocation-related
         # kernels.
-        new_buffer = jax_tensor_set(xla_buffer_to_jax_tensor(buffer),
-                                    recv_tensor, start_indices)
-        new_buffer = jax_tensor_to_xla_buffer(new_buffer)
+        print("buffer: ", type(buffer))
+        # print("deviceid: ", worker.mesh_ids)
+        print("device_id: ", worker.local_devices[device_id])
+        
+        
+        # print("shape of new_buffer1: ", new_buffer1.shape)
+        # new_buffer = jax_tensor_set(xla_buffer_to_jax_tensor(buffer), recv_tensor, start_indices)
+        
+        # new_buffer = jax_tensor_to_xla_buffer(new_buffer)
+        # import jax
+        # new_buffer = jax.lax.dynamic_update_slice(buffer, device_put(recv_tensor, worker.local_devices[device_id]), start_indices)
+        # print("new_buffer: ", new_buffer)
+        # print("shape of new buffer: ", new_buffer.shape)
+        print("shape of recv_tensor", len(recv_tensor))
+        print("dtype of new buffer: ", recv_tensor.dtype)
+        # buffer = device_put(buffer, worker.local_devices[device_id])
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        # recv_tensor = device_put(recv_tensor, worker.local_devices[device_id])
+        
+        
+        # new_buffer = jax.lax.dynamic_update_slice(buffer, recv_tensor, start_indices)
+      
+        # print("new_buffer1: ", buffer.shape)
+        new_buffer = jax_tensor_set(buffer, recv_tensor, start_indices)
+        # print("new_buffer2: ", new_buffer.shape)
+        # new_buffer = device_put(jnp.zeros(new_buffer.shape), worker.local_devices[device_id])
+        # new_buffer = new_buffer._value
+      
     if is_bool:
-        new_buffer = _uint8_to_bool(new_buffer)
+        # new_buffer = _uint8_to_bool(new_buffer)
+        new_buffer = new_buffer.astype(np.bool_)
     worker.buffers[uuid][device_id] = new_buffer
 
 
@@ -189,7 +232,6 @@ def broadcast(worker, uuid, comm_key, world_size, devices_ids,
                 tmp = jax_tensor_to_cupy(tmp, take_ownership=True)
             to_use.append(tmp)
             for_buffer.append(tmp)
-
     _, n_elements = infer_offset_and_n_elements(tensor_slices[0])
     col.broadcast_partialgpu(to_use, n_elements, comm_key, world_size,
                              devices_ids, devices_global_rank, group_name)

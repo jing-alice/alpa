@@ -30,15 +30,24 @@ import threading
 import time
 from typing import Any, List, Union, Sequence, Tuple, Optional
 
-from jax import core, xla, device_put
-from jax._src.api import ShapeDtypeStruct
-from jax._src.lib import xla_bridge as xb, xla_extension as xe
-from jax._src.tree_util import tree_leaves
-from jax.abstract_arrays import array_types
+from jax import core, device_put
+from jax._src.interpreters import  xla
+from jax import ShapeDtypeStruct
+from jax._src import xla_bridge as xb
+from jax.lib import xla_extension as xe
+from jax.tree_util import tree_leaves
+from jax._src.abstract_arrays import array_types
 from jax.core import ShapedArray
-from jax.interpreters import pxla
-from jax.interpreters.pxla import (ShardingSpec, _hashable_index,
-                                   ShardedDeviceArray, Index)
+from jax._src.interpreters import pxla
+from jax.interpreters.pxla import (
+    ShardingSpec,
+    # ShardedDeviceArray,
+    Index,
+)
+from jax import Array
+from jax._src.array import _hashable_index
+from jax._src.interpreters.pxla import _get_pmap_sharding
+from jax._src.sharding_specs import spec_to_indices
 from jax.lib import xla_client
 import jax.numpy as jnp
 import numpy as np
@@ -49,7 +58,7 @@ from alpa import mesh_profiling
 import alpa.collective as col
 from alpa.global_env import global_config
 from alpa.monkey_patch import set_override_backend
-from alpa.shard_parallel.auto_sharding import (LogicalDeviceMesh)
+from alpa.shard_parallel.auto_sharding import LogicalDeviceMesh
 from alpa.parallel_plan import PlacementSpec
 from alpa.timer import timers, tracer
 from alpa.util import (benchmark_func, list_gpu_info, OrderedSet,
@@ -57,6 +66,7 @@ from alpa.util import (benchmark_func, list_gpu_info, OrderedSet,
                        try_import_ray_worker, create_placement_group,
                        get_bundle_idx, retrieve_placement_group, get_bundle2ip,
                        check_server_port)
+from jax._src.sharding_impls import PositionalSharding
 
 ray_worker = try_import_ray_worker()
 
@@ -118,7 +128,7 @@ class MeshHostWorker:
         self.move_worker = move_worker
         self.distributed_client = (
             xla_client._xla.get_distributed_runtime_client(
-                server_address, host_id, use_coordination_service=False))
+                server_address, host_id))
         logger.debug(
             f"{host_id}: Trying to connect to xla runtime at {server_address}")
         self.distributed_client.connect()
@@ -129,7 +139,7 @@ class MeshHostWorker:
         global_config.update_worker_config(worker_global_config)
         if global_config.backend == "gpu":
             self.backend = xla_client.make_gpu_client(self.distributed_client,
-                                                      node_id=host_id)
+                                                      node_id=host_id, num_nodes=self.num_hosts)
         else:
             raise NotImplementedError(
                 f"backend {global_config.backend} is not supported")
@@ -212,11 +222,15 @@ class MeshHostWorker:
 
     def _get_buffers_with_local_ids(self, uuid: int, device_ids: Sequence[int]):
         bufs = self.buffers[uuid]
+        # print("device_ids:", device_ids)
+        if uuid ==30 or uuid==22:
+            print("bufsofuuid: ", uuid, np.asarray(bufs).shape)
         # TODO(yonghao): sync communication events. Currently it's safe because
         # we never get values immediately after a cross-mesh communication.
         if device_ids is None:
             return map(np.asarray, bufs)
         elif not isinstance(device_ids, Iterable):
+            print("1111 of uuid: ", uuid, bufs[device_ids].shape)
             return np.asarray(bufs[device_ids])
         return [np.asarray(bufs[device_id]) for device_id in device_ids]
 
@@ -224,6 +238,8 @@ class MeshHostWorker:
                     uuids: Union[Sequence[int], int],
                     device_indices: Sequence[int] = None):
         if not isinstance(uuids, Iterable):
+            print("uuids of get:" ,uuids)
+            print("device_indices: ", device_indices)
             return self._get_buffers_with_local_ids(uuids, device_indices)
         if device_indices is not None:
             assert len(uuids) == len(device_indices)
@@ -272,6 +288,7 @@ class MeshHostWorker:
     ##### Executable Related Functions #####
     def put_executable(self, uuid: int,
                        executable_class: "MeshWorkerExecutable", *args):
+        # breakpoint()
         self.executables[uuid] = executable_class(self, uuid, *args)
 
     def delete_executable(self, uuid: int):
@@ -641,7 +658,6 @@ class PhysicalDeviceMesh(ABC):
     num_devices_per_host: int
     mesh_id: int
     operation_executables: dict
-    one_replica_ids: dict
 
     def get_signature(self) -> str:
         """Return a signature string that contains the mesh shape and GPU
@@ -651,27 +667,6 @@ class PhysicalDeviceMesh(ABC):
         ret = f"{self.num_hosts},{self.num_devices_per_host},{gpu_name}"
         ret = ret.replace(" ", "-")
         return ret
-
-    def _compute_one_replica_ids(self, indices, aval_shape, sharding_spec):
-        # Tuple (aval_shape, sharding_spec) is 1-1 mapped to indices
-        # used to compute one_replica_ids
-        if (aval_shape, sharding_spec) in self.one_replica_ids:
-            return self.one_replica_ids[(aval_shape, sharding_spec)]
-
-        one_replica_indices = []
-        one_replica_host_local_ids = []
-        seen_index_hashes = set()
-        for i, index in enumerate(indices):
-            hashed_index = _hashable_index(index)
-            if hashed_index not in seen_index_hashes:
-                one_replica_indices.append(i)
-                one_replica_host_local_ids.append(
-                    divmod(i, self.num_devices_per_host))
-                seen_index_hashes.add(hashed_index)
-        self.one_replica_ids[(
-            aval_shape,
-            sharding_spec)] = one_replica_indices, one_replica_host_local_ids
-        return one_replica_indices, one_replica_host_local_ids
 
     @property
     def shape(self):
@@ -800,7 +795,7 @@ class PhysicalDeviceMesh(ABC):
             for x in placement_specs)
         specs = tuple(x.sharding_specs[0] for x in placement_specs)
         indices = tuple(
-            pxla.spec_to_indices(aval.shape, spec)
+            spec_to_indices(aval.shape, spec)
             for aval, spec in zip(avals, specs))
         return self.shard_args_to_arrays(avals, indices, specs, args)
 
@@ -870,7 +865,6 @@ class LocalPhysicalDeviceMesh(PhysicalDeviceMesh):
         self.mesh_id = -1
         self.device_strs = []
         self.operation_executables = {}
-        self.one_replica_ids = {}
 
         self.backend = xb.get_backend(global_config.backend)
 
@@ -888,19 +882,23 @@ class LocalPhysicalDeviceMesh(PhysicalDeviceMesh):
             if is_batch_var:
                 micro_batches = jnp.split(arg, num_micro_batches)
                 bufs.append([
-                    pxla._shard_arg(x, self.devices, indices, None)
+                    pxla.shard_arg(x, self.devices, indices, None)
                     for x in micro_batches
                 ])
             else:
-                if (isinstance(arg, pxla.ShardedDeviceArray) and
-                        arg.indices == indices):
+                if (isinstance(arg, Array) and arg.is_fully_addressable and len(arg.sharding.device_set) > 1) and (spec_to_indices(arg.aval.shape, arg.sharding.sharding_spec) == indices):
                     bufs.append(arg.device_buffers)
                 else:
-                    bufs.append(
-                        pxla._shard_arg(arg, self.devices, indices, None))
-
-            if isinstance(arg, xe.DeviceArray) and donated:
-                arg.delete()
+                    # sharding = SingleDeviceSharding(self.devices)
+                    sharding = PositionalSharding(self.devices)
+                    bufs.append((pxla.shard_arg(arg, self.devices, indices, sharding)).device_buffers)
+            
+            # 判断是否切分过
+            # if isinstance(arg, xe.ArrayImpl) and donated:
+            #     arg.delete()
+            # if isinstance(arg, xe.DeviceArray) and donated:
+            # if isinstance(arg, Array) and donated:
+            #     arg.delete()
 
         return bufs
 
@@ -917,14 +915,14 @@ class LocalPhysicalDeviceMesh(PhysicalDeviceMesh):
             ]
             buffers = [device_put(x, d) for x, d in zip(shards, self.devices)]
             arrays.append(
-                pxla._ShardedDeviceArray(avals[i], sharding_specs[i], buffers,
+               Array(avals[i], sharding_specs[i], buffers,
                                          shard_indices[i]))
         return arrays
 
     def get_outputs_handler(self, avals: Sequence[ShapedArray],
                             sharding_specs: Sequence[ShardingSpec]):
-        pmap_specs = pxla._get_pmap_sharding(np.arange(self.num_devices),
-                                             sharding_specs)
+        pmap_specs = _get_pmap_sharding(np.array(self.devices),
+                                        sharding_specs)
         outs_handler = pxla.local_avals_to_results_handler(avals, pmap_specs)
         return outs_handler
 
@@ -1000,7 +998,6 @@ class DistributedPhysicalDeviceMesh(PhysicalDeviceMesh):
         self.workers = None
         self.service_server = None
         self.operation_executables = {}
-        self.one_replica_ids = {}
         self.namespace = namespace
 
         if devices is not None:
@@ -1067,7 +1064,8 @@ class DistributedPhysicalDeviceMesh(PhysicalDeviceMesh):
         server_address = f"{ray.util.get_node_ip_address()}:{port}"
         logger.debug(f"Trying to start XLA gRPC server on port: {port}...")
         service_server = xla_client._xla.get_distributed_runtime_service(
-            server_address, self.num_hosts, use_coordination_service=False)
+            server_address, self.num_hosts)
+            # server_address, self.num_hosts, use_coordination_service=False)
         logger.debug(f"Success to start XLA gRPC server on port: {port}...")
         time.sleep(0.4)
 
@@ -1357,7 +1355,7 @@ class DistributedPhysicalDeviceMesh(PhysicalDeviceMesh):
     def get_outputs_handler(self, avals: Sequence[ShapedArray],
                             sharding_specs: Sequence[ShardingSpec]):
         indices = [
-            pxla.spec_to_indices(aval.shape, spec)
+            spec_to_indices(aval.shape, spec)
             for aval, spec in zip(avals, sharding_specs)
         ]
 
@@ -1530,12 +1528,14 @@ class DistributedArray:
         self.remote_ref = remote_ref
 
         if indices is None:
-            indices = pxla.spec_to_indices(self.aval.shape, self.sharding_spec)
+            indices = spec_to_indices(self.aval.shape, self.sharding_spec)
         self.indices = indices
 
         self.shape = self.aval.shape
         self.dtype = self.aval.dtype
         self._npy_value = None
+        self._one_replica_host_local_ids = None
+        self._one_replica_buffer_ids = None
         self._fetched_np_buffers = None
         self._fetched_np_buffers_ref = None
         self.skip_shard_args_check = False
@@ -1554,7 +1554,7 @@ class DistributedArray:
 
     def block_until_ready(self):
         """Block until all remote buffers of this array are ready."""
-        self.device_mesh.block_until_ready_remote_buffers([self.remote_ref])
+        self.device_mesh.block_until_ready_remote_buffers(self.uuid)
 
     def delete(self):
         self.remote_ref = None
@@ -1622,7 +1622,7 @@ class DistributedArray:
         """
         # pylint: disable=import-outside-toplevel
         ary_ref = RemoteArrayRef(device_mesh)
-        indices = pxla.spec_to_indices(aval.shape, sharding_spec)
+        indices = spec_to_indices(aval.shape, sharding_spec)
 
         indices_per_host = {}
         device_ids_per_host = {}
@@ -1642,20 +1642,40 @@ class DistributedArray:
         return DistributedArray(device_mesh, aval, sharding_spec, ary_ref,
                                 indices)
 
+    def _compute_one_replica_ids(self):
+        one_replica_indices = []
+        one_replica_host_local_ids = []
+        seen_index_hashes = set()
+        for i, index in enumerate(self.indices):
+            hashed_index = _hashable_index(index)
+            if hashed_index not in seen_index_hashes:
+                one_replica_indices.append(i)
+                one_replica_host_local_ids.append(
+                    divmod(i, self.device_mesh.num_devices_per_host))
+                seen_index_hashes.add(hashed_index)
+        self._one_replica_buffer_ids = one_replica_indices
+        self._one_replica_host_local_ids = one_replica_host_local_ids
+
+    # TODO(yonghao): to make ._value faster(in reorder buffer), cache different
+    # buffers with the same mesh shape and sharding spec.
     @property
     def one_replica_buffer_ids(self):
         """Indices of buffers containing one complete copy of the array data."""
-        return self.device_mesh._compute_one_replica_ids(
-            self.indices, self.aval.shape, self.sharding_spec)[0]
+        if self._one_replica_buffer_ids is None:
+            self._compute_one_replica_ids()
+        return self._one_replica_buffer_ids
 
     @property
     def one_replica_host_local_ids(self):
-        return self.device_mesh._compute_one_replica_ids(
-            self.indices, self.aval.shape, self.sharding_spec)[1]
+        if self._one_replica_host_local_ids is None:
+            self._compute_one_replica_ids()
+        return self._one_replica_host_local_ids
 
     @property
     def _value(self):
         if self._npy_value is None:
+            print("remote_ref: ", self.remote_ref)
+            print("one_replica_host_local_ids: ", self.one_replica_host_local_ids)
             npy_value = np.empty(self.aval.shape, self.aval.dtype)
             if not self._fetched_np_buffers:
                 if not self._fetched_np_buffers_ref:
@@ -1665,7 +1685,7 @@ class DistributedArray:
                 else:
                     fetched_np_buffers = ray.get(self._fetched_np_buffers_ref)
             else:
-                fetched_np_buffers = self._fetched_np_buffers
+                fetched_np_buffers = self._fetched_np_buffers 
             for ct, i in enumerate(self.one_replica_buffer_ids):
                 npy_value[self.indices[i]] = fetched_np_buffers[ct]
             self._npy_value = npy_value
@@ -1752,7 +1772,7 @@ xla.pytype_aval_mappings[ReplicatedDistributedArray] = attrgetter("aval")
 xla.canonicalize_dtype_handlers[ReplicatedDistributedArray] = lambda x: x
 
 
-def prefetch(dis_arrays: Sequence[Union[ShardedDeviceArray, DistributedArray,
+def prefetch(dis_arrays: Sequence[Union[Array, DistributedArray,
                                         ReplicatedDistributedArray]]):
     """Prefetch a pytree of DistributedArray in a batch.
 
@@ -1761,7 +1781,7 @@ def prefetch(dis_arrays: Sequence[Union[ShardedDeviceArray, DistributedArray,
     """
     group_by_mesh = defaultdict(list)
     for array in tree_leaves(dis_arrays):
-        if isinstance(array, ShardedDeviceArray):
+        if isinstance(array, Array):
             array.copy_to_host_async()
         elif isinstance(array, DistributedArray):
             group_by_mesh[array.device_mesh].append(array)
@@ -2030,7 +2050,7 @@ class PhysicalDeviceMeshGroup:
             if len(info.mesh_ids) == 1:
                 mesh = self.meshes[info.mesh_ids[0]]
                 spec = info.sharding_specs[0]
-                indices = pxla.spec_to_indices(aval.shape, spec)
+                indices = spec_to_indices(aval.shape, spec)
                 rets.append(
                     mesh.shard_args_to_arrays((aval,), (indices,), (spec,),
                                               (arg,))[0])
@@ -2039,7 +2059,7 @@ class PhysicalDeviceMeshGroup:
                 for mesh_id, spec in zip(info.mesh_ids, info.sharding_specs):
                     mesh = self.meshes[mesh_id]
                     meshes.append(mesh)
-                    indices = pxla.spec_to_indices(aval.shape, spec)
+                    indices = spec_to_indices(aval.shape, spec)
                     arrays.append(
                         mesh.shard_args_to_arrays((aval,), (indices,), (spec,),
                                                   (arg,))[0])
@@ -2312,7 +2332,6 @@ global_virtual_physical_mesh: VirtualPhysicalMesh = None
 
 
 def init_global_cluster(cluster: str,
-                        cluster_address: Optional[str] = None,
                         num_nodes: Optional[int] = None,
                         num_devices_per_node: Optional[int] = None,
                         namespace: Optional[str] = None):
@@ -2322,8 +2341,7 @@ def init_global_cluster(cluster: str,
         global_physical_mesh = LocalPhysicalDeviceMesh()
     elif cluster == "ray":
         if not ray.is_initialized():
-            ray_addr = cluster_address if cluster_address else "auto"
-            ray.init(address=ray_addr,
+            ray.init(address="auto",
                      ignore_reinit_error=True,
                      namespace=namespace)
         update_jax_platform("cpu")
@@ -2418,6 +2436,7 @@ def create_and_record_cross_mesh_collective_communicators(
     group_name = ",".join(device_strs)
     refs = []
     for rank, worker in enumerate(workers):
+        print(f"{world_size, rank, backend, group_name}")
         ref = worker.create_and_set_cross_mesh_communicators.remote(
             world_size, rank, backend, group_name, key)
         refs.append(ref)
@@ -2500,7 +2519,8 @@ for a in array_types:
     shard_arg_handlers[a] = _shard_array
 shard_arg_handlers[ShapedArray] = _shard_abstract_array
 shard_arg_handlers[ShapeDtypeStruct] = _shard_abstract_array
-shard_arg_handlers[xla._DeviceArray] = _shard_device_array
-shard_arg_handlers[xla._CppDeviceArray] = _shard_device_array
+# shard_arg_handlers[xla._DeviceArray] = _shard_device_array
+# shard_arg_handlers[xla._CppDeviceArray] = _shard_device_array
 shard_arg_handlers[DistributedArray] = _shard_distributed_array
-shard_arg_handlers[ShardedDeviceArray] = _shard_distributed_array
+shard_arg_handlers[Array] = _shard_distributed_array
+shard_arg_handlers[xe.ArrayImpl] = _shard_device_array

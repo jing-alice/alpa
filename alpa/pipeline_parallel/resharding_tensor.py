@@ -79,8 +79,8 @@ class VirtualDistributedArray:
             else:
                 # Generate tile assignments using proto
                 proto = self._sharding_spec_proto
-                shape = proto.tile_assignment_dimensions
-                devices_flat = proto.tile_assignment_devices
+                shape = proto.tile_assignment_dimensions()
+                devices_flat = proto.tile_assignment_devices()
                 self._tile_assignments = np.reshape(devices_flat, shape)
         return self._tile_assignments
 

@@ -7,7 +7,7 @@ from typing import Callable, Optional
 import jax
 import jax.numpy as jnp
 from jax.tree_util import tree_leaves
-from jax.experimental.maps import FrozenDict as FrozenDictJax
+from jax._src.maps import FrozenDict as FrozenDictJax
 import numpy as np
 import optax
 from flax import linen as nn
@@ -40,7 +40,10 @@ def assert_allclose(x, y, rtol=1e-4, atol=1e-4):
     elif hasattr(x, "__array__") or np.isscalar(x):
         assert hasattr(y, "__array__") or np.isscalar(y), f"{y}"
         x = np.asarray(x)
-        y = np.asarray(y)
+        # print("x: ", x)
+        # print("y: ", y)
+        if hasattr(y, "_value"): 
+            y = np.asarray(y._value)
         np.testing.assert_allclose(x, y, rtol, atol)
     elif isinstance(x, TrainState):
         assert isinstance(y, TrainState)

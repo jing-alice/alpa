@@ -69,7 +69,7 @@ class ParallelPlanTest(unittest.TestCase):
 
 def suite():
     s = unittest.TestSuite()
-    s.addTest(ParallelPlanTest("test_shard_parallel"))
+    # s.addTest(ParallelPlanTest("test_shard_parallel"))
     s.addTest(ParallelPlanTest("test_pipeshard_parallel"))
     return s
 

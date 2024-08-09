@@ -1,0 +1,15 @@
+#loc = loc(unknown)
+module @add_one_shard_parallel attributes {mhlo.cross_program_prefetches = [], mhlo.is_dynamic = false, mhlo.use_auto_spmd_partitioning = false} {
+  func.func @main(%arg0: tensor<64x64xf32> {mhlo.sharding = "{devices=[4,1]0,1,2,3}"} loc(unknown)) -> (tuple<tensor<64x64xf32>> {mhlo.sharding = "{{devices=[4,1]0,1,2,3}}"}) {
+    %0 = stablehlo.constant {mhlo.sharding = "{replicated}"} dense<1.000000e+00> : tensor<f32> loc(#loc1)
+    %1 = stablehlo.constant dense<1.000000e+00> : tensor<64x64xf32> loc(#loc5)
+    %2 = stablehlo.add %arg0, %1 {mhlo.sharding = "{devices=[4,1]0,1,2,3}"} : tensor<64x64xf32> loc(#loc5)
+    %3 = stablehlo.tuple %2 {mhlo.sharding = "{{devices=[4,1]0,1,2,3}}", xla_shape = "(f32[64,64]{1,0})"} : tuple<tensor<64x64xf32>> loc(#loc4)
+    return %3 : tuple<tensor<64x64xf32>> loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc1 = loc("constant.2")
+#loc2 = loc("parallelize(add_one_shard_parallel)/jit(main)/add")
+#loc3 = loc("/data/hejing/distri/alpa/tests/runtime/test_device_mesh.py":60:0)
+#loc4 = loc("tuple.5")
+#loc5 = loc(fused[#loc2, #loc3])

@@ -69,12 +69,16 @@ class GlobalConfig:
         # This is a debug option.
         self.pipeline_use_signal_send_recv = False
         # Whether to use the scatter-gater/local-all-gather optimization.
-        self.use_local_allgather = True
+        # FIXME: send-recv with allgather is broken. Test after setting the
+        # sharding spec of the output is fixed.
+        self.use_local_allgather = False
         # Cross mesh resharding mode. Possible choices: {"send_recv",
         # "broadcast"}
         self.resharding_mode = "send_recv"
         # Which nccl to use. Possible choices: {"cupy",
         # "xla_extension"}
+        # FIXME: cupy is broken. Test after ArrayImpl-DeviceArray-Buffer
+        # relationship is fixed.
         self.nccl_mode = "cupy"
         self.enable_overlapping = False
         # Cross mesh resharding load balancing mode.
@@ -124,7 +128,7 @@ class GlobalConfig:
         # timer
         self.pipeline_sync_for_timer = cfg.pipeline_sync_for_timer
         # Whether to use single-byte signal tensor for send/recv.
-        # This is a debug option.
+        # This is a dFebug option.
         self.pipeline_use_signal_send_recv = cfg.pipeline_use_signal_send_recv
         # Whether to use the scatter-gater/local-all-gather optimization.
         self.use_local_allgather = cfg.use_local_allgather

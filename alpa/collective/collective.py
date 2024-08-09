@@ -6,7 +6,7 @@ from typing import List
 import numpy as np
 import ray
 from jax._src.lib import xla_extension as xe
-
+from jax import Array
 from alpa.collective import types
 from alpa.global_env import global_config
 from alpa.util import try_import_ray_worker
@@ -203,6 +203,7 @@ def create_collective_group(actors,
     _check_backend_availability(backend)
 
     name = "info_" + group_name
+    
     try:
         ray.get_actor(name)
         raise RuntimeError("Trying to initialize a group twice.")
@@ -223,7 +224,7 @@ def create_collective_group(actors,
     if world_size <= 0:
         raise RuntimeError("World size must be greater than zero. "
                            f"Got '{world_size}'.")
-    if not all(ranks) >= 0:
+    if not all(ranks) >= 0: 
         raise RuntimeError("Ranks must be non-negative.")
     if not all(ranks) < world_size:
         raise RuntimeError("Ranks cannot be greater than world_size.")
@@ -295,6 +296,7 @@ def allreduce(tensor, group_name: str = "default", op=types.ReduceOp.SUM):
     g = _check_and_get_group(group_name)
     opts = types.AllReduceOptions
     opts.reduce_op = op
+    print("tensor: ", tensor)
     g.allreduce([tensor], opts)
 
 
@@ -800,7 +802,8 @@ def compute_wait_comm(group_name, is_send, is_compute, device_id):
 
 def _check_single_tensor_input(tensor):
     """Check if the tensor is with a supported type."""
-    if isinstance(tensor, (np.ndarray, xe.DeviceArray)):
+    # if isinstance(tensor, (np.ndarray, xe.DeviceArray)):
+    if isinstance(tensor, (np.ndarray, Array)):
         return
     if types.cupy_available():
         if isinstance(tensor, types.cp.ndarray):

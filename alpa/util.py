@@ -17,20 +17,26 @@ from warnings import warn
 from flax.training import train_state
 from flax.training.common_utils import stack_forest
 import jax
+from jax._src.util import wrap_name
 from jax._src.source_info_util import SourceInfo
 import jax.numpy as jnp
-from jax._src import dispatch, util
-from jax._src.api import FLAGS, ShapeDtypeStruct
-from jax._src.lib import xla_bridge as xb, xla_client as xc, xla_extension as xe
+from jax._src import dispatch, source_info_util
+from jax._src.api import ShapeDtypeStruct
+from jax.lib import (
+    xla_bridge as xb,
+    xla_client as xc,
+    xla_extension as xe
+)
 from jax.api_util import shaped_abstractify
 from jax import core
 from jax.core import (Atom, ClosedJaxpr, DropVar, Jaxpr, JaxprEqn, Literal,
                       Primitive, ShapedArray, Var, AbstractValue, gensym)
-from jax.experimental.maps import FrozenDict
+from jax._src.maps import FrozenDict
 from jax import linear_util as lu
 from jax.interpreters import partial_eval as pe
 from jax.interpreters import xla, pxla, mlir
-from jax.interpreters.xla import _DeviceArray
+# from jax.interpreters.xla import 
+from jax._src.array import make_array_from_callback, make_array_from_single_device_arrays
 from jax.tree_util import tree_map, tree_flatten, PyTreeDef
 import numpy as np
 import ray
@@ -309,6 +315,10 @@ def cached_property(fn, *args, **kwargs):
 ########################################
 
 
+def xla_computation_to_mlir_text(xla_computation: xc.XlaComputation):
+    return xc._xla.mlir.xla_computation_to_mlir_module(xla_computation)
+
+
 def get_compile_options(num_replicas: int,
                         num_partitions: int,
                         device_assignment: np.ndarray,
@@ -328,7 +338,10 @@ def get_compile_options(num_replicas: int,
     build_options = compile_options.executable_build_options
     build_options.seed = build_random_seed
     build_options.allow_spmd_sharding_propagation_to_output =\
-        spmd_propagation_to_outputs
+        [spmd_propagation_to_outputs]
+    # FIXME: re-enable the new runtime when everything is ready.
+    debug_options = build_options.debug_options
+    debug_options.xla_gpu_enable_xla_runtime_executable = False
     return compile_options
 
 
@@ -341,13 +354,13 @@ def jaxpr_to_hlo(name: str,
     Reference code: jax/jax/_src/dispatch.py::lower_xla_callable
     """
     consts = closed_jaxpr.consts
-    map(dispatch.prefetch,
-        it.chain(consts, dispatch.jaxpr_literals(closed_jaxpr.jaxpr)))
+    # map(dispatch.prefetch,
+    #     it.chain(consts, dispatch.jaxpr_literals(closed_jaxpr.jaxpr)))
 
     # Convert jaxpr to XLA HLO
     tuple_args = False
     axis_env = xla.AxisEnv(nreps=1, names=(), sizes=())
-    name_stack = util.new_name_stack(xla.wrap_name(name, "parallelize"))
+    name_stack = source_info_util.new_name_stack(wrap_name(name, "parallelize"))
     closed_jaxpr = ClosedJaxpr(closed_jaxpr.jaxpr, consts)
     unordered_effects = [
         eff for eff in closed_jaxpr.effects if eff not in core.ordered_effects
@@ -356,8 +369,8 @@ def jaxpr_to_hlo(name: str,
         eff for eff in closed_jaxpr.effects if eff in core.ordered_effects
     ]
     lowering_result = mlir.lower_jaxpr_to_module(
-        name, closed_jaxpr, unordered_effects, ordered_effects, None, platform,
-        mlir.ReplicaAxisContext(axis_env), name_stack, donated_invars)
+        name, closed_jaxpr, ordered_effects=ordered_effects, backend_or_name=None, platform=platform,
+        axis_context=mlir.ReplicaAxisContext(axis_env), name_stack=name_stack, donated_args=donated_invars)
     xla_computation = xe.mlir.mlir_module_to_xla_computation(
         mlir.module_to_string(lowering_result.module),
         use_tuple_args=tuple_args,
@@ -458,10 +471,13 @@ def compile_allocate_zero_buffers(backend, num_devices: int,
         device_assignment=np.arange(num_devices).reshape((1, -1)),
         use_spmd_partitioning=True,
     )
+    build_options = compile_options.executable_build_options
+    build_options.allow_spmd_sharding_propagation_to_output = [True]
     with XlaPassContext({
             "done-event::enable": global_config.enable_overlapping,
     }):
-        compiled = backend.compile(c, compile_options)
+        compiled = backend.compile(xla_computation_to_mlir_text(c),
+                                   compile_options)
     return compiled
 
 
@@ -513,16 +529,7 @@ def compile_allgather(shape, dtype, src_spec, dst_spec, num_devices):
     c.set_sharding(dst_sharding)
     hlo_module = c.build(xc.ops.Tuple(c, [operand])).as_hlo_module()
 
-    build_random_seed = global_config.compile_random_seed
-    compile_options = get_compile_options(
-        num_replicas=1,
-        num_partitions=num_devices,
-        device_assignment=np.arange(num_devices).reshape((1, -1)),
-        use_spmd_partitioning=True,
-        parameter_is_tupled_arguments=False,
-        build_random_seed=build_random_seed)
-    xe.run_spmd_partitioner(hlo_module, compile_options)
-    return WrappedHlo(hlo_module, HloStatus.SPMD_PARTITIONED)
+    return WrappedHlo(hlo_module, HloStatus.SHARDING_ANNOTATED)
 
 
 def get_index_select_computation(sharding_specs, dim, avals, index_shape):
@@ -1137,8 +1144,8 @@ def is_continuous_subset(tensor_slice, tensor_shape, row_major=True):
     if not row_major:
         raise NotImplementedError("Do not support column major.")
     ndim = len(tensor_shape)
-    if len(tensor_slice) != ndim:
-        raise RuntimeError("ndims mismatch.")
+    # if len(tensor_slice) != ndim:
+    #     raise RuntimeError("ndims mismatch.")
     slice_shape = tuple(ind.stop - ind.start for ind in tensor_slice)
     for dim, dim_shape in enumerate(slice_shape):
         if dim + 1 > ndim:
@@ -1179,19 +1186,19 @@ def xla_buffer_to_jax_tensor(xla_buf):
 
     So we can index over the data buffer.
     """
-    aval = ShapedArray(xla_buf.shape, xla_buf.dtype)
-    return _DeviceArray(aval, xla_buf.device(), xla_buf)
-
-
+    
+    return jax.device_put(xla_buf, xla_buf.device())
+    
 def jax_tensor_to_xla_buffer(jax_buf):
     """Convert a JAX Device array back to XLA buffer."""
+    # return jax_buf.device_buffer
+    # return jax_buf._value
     return jax_buf.device_buffer
-
 
 # Note: use Python jit instead of CPP jit,
 # because CPP jit has bugs on _DeviceArray.
-if is_worker:
-    FLAGS.experimental_cpp_jit = False
+# if is_worker:
+#     FLAGS.experimental_cpp_jit = False
 
 
 # Note(Hao): this function will be jit-ed into as many versions as the possible
@@ -1208,7 +1215,10 @@ def jax_tensor_set(src_buf, update, start_indices):
         indices.
     """
     # src_buf = src_buf.at[indices].set(update)
+    print("start_indices: ", start_indices)
+    # print("shape1: ", src_buf.shape)
     src_buf = jax.lax.dynamic_update_slice(src_buf, update, start_indices)
+    # print("shape2: ", src_buf.shape)
     return src_buf
 
 

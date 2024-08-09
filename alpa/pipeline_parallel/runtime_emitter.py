@@ -133,7 +133,7 @@ ConcatWorkerExecutableConfig = namedtuple("ConcatWorkerExecutableConfig",
                                           ["exec_uuid", "hlo"])
 PartialGradWorkerExecutableConfig = namedtuple(
     "PartialGradWorkerExecutableConfig",
-    ["exec_uuid", "hlo", "stage_plan", "donated_invars"])
+    ["exec_uuid", "hlo", "stage_plan", "donated_invars", "grad_acc_indices"])
 
 ExecutableConfig = Union[AllocateZeroWorkerExecutableConfig,
                          PartialGradWorkerExecutableConfig,
@@ -186,7 +186,12 @@ class PipelineInstEmitterHelper:
 
     def get_var_mesh_uuid(self, var, batch_idx, mesh_idx) -> int:
         key = self._get_var_key(var, batch_idx)
-        return self.env[key][mesh_idx]
+        try:
+            return self.env[key][mesh_idx]
+        except KeyError as e:
+            print(key, var, batch_idx, mesh_idx)
+            print(self.env[key])
+            raise e
 
     def get_var_meshes(self, var, batch_idx) -> Dict[int, int]:
         key = self._get_var_key(var, batch_idx)
@@ -604,9 +609,10 @@ class PipelineInstEmitter:
             mesh_idx = self.schedule.stage_placement(stage_idx)
             assert len(mesh_idx) == 1
             mesh_idx = list(mesh_idx)[0]
-            hlo = stage.get_spmd_partitioned()
+            hlo = stage.get_hlo_for_backend_compilation()
             exec_config = PartialGradWorkerExecutableConfig(
-                exec_uuid, hlo, stage.stage_plan, stage.donated_invars)
+                exec_uuid, hlo, stage.stage_plan, stage.donated_invars,
+                stage.output_acc_grad_indices)
 
             for worker in self.mesh_group[mesh_idx].workers:
                 executable_config_lists[worker].append(exec_config)
@@ -1131,6 +1137,8 @@ class OverlapFriendlyPipelineInstEmitter(PipelineInstEmitter):
             for var_idx, var in enumerate(stage.invars):
                 if (var in global_invar_set or var in self.grad_dummy_invars or
                         mesh_idx in var_at_mesh[var]):
+                    if str(var) == "cus":
+                        print("skip at mesh", stage_idx, mesh_idx)
                     continue
                 else:
                     # Currently we use the first mesh, since there is almost no
@@ -1148,6 +1156,7 @@ class OverlapFriendlyPipelineInstEmitter(PipelineInstEmitter):
             for var in stage.outvars:
                 var_defined.setdefault(var, OrderedSet()).add(stage_idx)
                 var_at_mesh.setdefault(var, OrderedSet()).add(mesh_idx)
+        print(self.stage_send_vars[0])
         # Reorder send and merge
         for stage_idx, stage in enumerate(self.stages):
             send_vars = self.stage_send_vars[stage_idx]
@@ -1155,8 +1164,8 @@ class OverlapFriendlyPipelineInstEmitter(PipelineInstEmitter):
                 k: i for i, k in enumerate(outvar_def_order[stage_idx])
             }
             send_vars = sorted(send_vars,
-                               key=lambda sv, order=var_def_order:
-                               (order[sv[1]], sv[0]))
+                               key=lambda i, v, _, order=var_def_order:
+                               (order[v], i))
             final_send_seq = []
             for recv_stage_idx, v, spec in send_vars:
                 if (len(final_send_seq) != 0 and

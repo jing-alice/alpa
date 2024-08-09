@@ -35,7 +35,8 @@ from jax.interpreters import pxla
 from alpa.global_env import global_config
 from alpa.parallel_plan import StagePlan
 from alpa.timer import timers
-from alpa.util import check_arithmetic_sequence, get_compile_options, XlaPassContext
+from alpa.util import (check_arithmetic_sequence, get_compile_options,
+                       XlaPassContext, xla_computation_to_mlir_text)
 from alpa.wrapped_hlo import HloStatus, WrappedHlo
 
 logger = logging.getLogger(__name__)
@@ -306,6 +307,7 @@ def run_auto_sharding_pass(
             "auto_sharding::force_simple_heuristic":
                 as_option.force_simple_heuristic,
 
+
             # Device mesh
             "auto_sharding::device_mesh_ids":
                 logical_mesh.flatten_ids,
@@ -374,6 +376,8 @@ def run_spmd_partitioner_pass(
         rewrite_for_grad_acc: bool = False,
         rewrite_grad_acc_indices: Optional[Sequence[int]] = None):
     """Run SPMD partitioner pass on a sharding annotated HLO Module.
+    The output of this function should only be used for getting sharding spec,
+    but not running followup backend compilations.
 
     Args:
       hlo: The wrapped HLO module, whose status should be SHARDING_ANNOTATED.
@@ -406,11 +410,16 @@ def run_spmd_partitioner_pass(
     return hlo
 
 
-def run_backend_compilation(backend: xe.Client,
-                            hlo: WrappedHlo,
-                            stage_plan: StagePlan,
-                            num_devices: int,
-                            bypass_device_assignment_check: bool = False):
+def run_backend_compilation(
+        backend: xe.Client,
+        hlo: WrappedHlo,
+        stage_plan: StagePlan,
+        num_devices: int,
+        bypass_device_assignment_check: bool = False,
+        rewrite_for_grad_acc: bool = False,
+        rewrite_grad_acc_indices: Optional[Sequence[int]] = None,
+        exe_id = None,
+        mesh_id = None):
     """Compile a spmd partitioned Hlo Module to an XLA executable.
 
     Args:
@@ -420,16 +429,24 @@ def run_backend_compilation(backend: xe.Client,
       num_devices: The total number of devices.
       bypass_device_assignment_check: Whether to compile without exact devices.
     """
-    assert hlo.is_spmd_partitioned() or hlo.is_sharding_annotated()
+    assert hlo.is_sharding_annotated()
     compile_options = get_compile_options(
         num_replicas=1,
         num_partitions=num_devices,
         device_assignment=np.arange(num_devices).reshape((1, -1)),
-        use_spmd_partitioning=hlo.is_sharding_annotated(),
+        use_spmd_partitioning=True,
         parameter_is_tupled_arguments=False,
-        build_random_seed=stage_plan.build_random_seed)
+        build_random_seed=stage_plan.build_random_seed,
+        spmd_propagation_to_outputs=True)
+
+    if rewrite_for_grad_acc and rewrite_grad_acc_indices is None:
+        rewrite_grad_acc_indices = tuple(
+            range(len(hlo.program_shape().result_shape().tuple_shapes())))
 
     with XlaPassContext({
+            # Gradient accumulation rewrite:
+            "auto_sharding::rewrite_for_grad_acc": rewrite_for_grad_acc,
+            "auto_sharding::rewrite_indices": rewrite_grad_acc_indices,
             # Build options
             "build_option::bypass_device_assignment_check":
                 bypass_device_assignment_check,
@@ -442,7 +459,32 @@ def run_backend_compilation(backend: xe.Client,
             "done-event::enable":
                 global_config.enable_overlapping,
     }):
-        compiled = backend.compile(hlo.get_computation(), compile_options)
+        if mesh_id==1:
+        #     print("num_partitions:", num_devices)
+        #     print("build_random_seed:", stage_plan.build_random_seed)
+        #     print({
+        #         # Gradient accumulation rewrite:
+        #         "auto_sharding::rewrite_for_grad_acc": rewrite_for_grad_acc,
+        #         "auto_sharding::rewrite_indices": rewrite_grad_acc_indices,
+        #         # Build options
+        #         "build_option::bypass_device_assignment_check":
+        #             bypass_device_assignment_check,
+
+        #         # Communication combiner options
+        #         "combiner::all_gather_threshold":
+        #             stage_plan.all_gather_threshold,
+        #         "combiner::all_reduce_threshold":
+        #             stage_plan.all_reduce_threshold,
+        #         "done-event::enable":
+        #             global_config.enable_overlapping,
+        #         })
+            print(f"./vgg_hlo{mesh_id}_compilation.txt000")
+            with open(f"./vgg_hlo{mesh_id}_compilation.txt","w+") as f:
+                print(f"./vgg_hlo{mesh_id}_compilation.txt")
+                f.write(xla_computation_to_mlir_text(hlo.get_computation()))    
+        compiled = backend.compile(
+            xla_computation_to_mlir_text(hlo.get_computation()),
+            compile_options)
 
     return compiled
 
@@ -559,7 +601,7 @@ def _hlo_sharding_to_sharding_spec_no_tuple(
 
 
 def hlo_sharding_to_sharding_spec(
-        hlo_sharding: "xe.HloSharding", aval: Union[Sequence[ShapedArray],
+       hlo_sharding: "xe.HloSharding", aval: Union[Sequence[ShapedArray],
                                                     ShapedArray],
         logical_mesh_shape: Sequence[int]) -> pxla.ShardingSpec:
     """Convert hlo sharding to sharding spec."""
